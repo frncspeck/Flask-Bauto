@@ -141,11 +141,18 @@ class AutoBlueprint:
                 methods=['GET','POST']
             )
             self.url_routes[f"Create {name}"] = f"{self.url_prefix}/{name}/create"
+            # List
+            self.blueprint.add_url_rule(
+                f"/{name}/list", f"{name}_list", 
+                view_func=self.list, defaults={'name':name},
+                methods=['GET']
+            )
+            self.url_routes[f"List {name}"] = f"{self.url_prefix}/{name}/list"
             # Read
             self.blueprint.add_url_rule(
                 f"/{name}/read/<int:id>", f"{name}_read", 
                 view_func=self.read, defaults={'name':name},
-                methods=['GET','POST']
+                methods=['GET']
             )
             # Update
             self.blueprint.add_url_rule(
@@ -197,8 +204,9 @@ class AutoBlueprint:
             return redirect(url_for(f"{self.name}_blueprint.{name}_read", id=item.id))
         return render_template('uxfab/form.html', form=form, title=f"Create {name}")
 
-    def list(self, model):
-        pass
+    def list(self, name):
+        items = self.db.session.query(self.models[name]).all()
+        return render_template('bauto/list.html', title=f"List {name}")
         
     def read(self, name, id):
         item = self.db.session.query(self.models[name]).get_or_404(id)

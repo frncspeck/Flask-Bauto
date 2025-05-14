@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "Flask-Bauto"
-version = "0.0.1"
+version = "0.0.2"
 readme = "README.md"
 dependencies = [
   'Flask-FEFset',
-  'Flask-UXFab'
+  'Flask-UXFab',
+  'Flask-SQLAlchemy'
 ]
