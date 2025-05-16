@@ -1,5 +1,6 @@
 import inspect
 from dataclasses import dataclass
+from collections import namedtuple
 from flask import Blueprint, render_template, redirect, flash, url_for
 from flask_wtf import FlaskForm
 from wtforms import Form, FormField, FieldList, StringField, EmailField, SubmitField, SelectField, BooleanField, IntegerField, FloatField
@@ -87,12 +88,14 @@ class AutoBlueprint:
             for fieldname, fieldtype in dm.__annotations__.items():
                 if fieldtype is relationship: continue
                 elif fieldname.endswith('_id') and fieldname[:-3] in self.models:
+                    model = self.models[fieldname[:-3]]
                     setattr(
                         ModelForm,
                         fieldname,
                         SelectField(
                             fieldname.replace('_',' ').capitalize(),
-                            choices=lambda: self.db.session.query(self.models[fieldname[:-3]]).all()
+                            # lambda required default model as otherwise the last reference to model is used
+                            choices=lambda model=model: [(i.id,i) for i in self.db.session.query(model).all()]
                         )
                     )
                 else: setattr(
@@ -120,8 +123,11 @@ class AutoBlueprint:
                 if not coltype is relationship
             ]
             for colname, coltype in dm.__annotations__.items():
-                if coltype is relationship: #TODO not yet working
-                    self.model_properties[name][colname] = getattr(dm, colname)
+                if coltype is relationship:
+                    self.model_properties[name][colname+'_list'] = (
+                        getattr(dm, colname) or
+                        relationship(colname.capitalize(), back_populates=name.lower())
+                    )
        
             table = Table(
                 name.lower(),
@@ -182,6 +188,12 @@ class AutoBlueprint:
             self.blueprint.add_url_rule(f"/{name}", name, view_func=viewfunction, methods=['GET'], defaults={'self':self})
             self.url_routes[name] = f"{self.url_prefix}/{name}"
 
+    # Database utilities
+    @property
+    def query(self):
+        nt = namedtuple('QueryModels', self.models.keys())
+        return nt(*(self.db.session.query(model) for model in self.models.values()))
+    
     # Predefined views without annotation as they are automatically added
     def index(self):
         return render_template(self.index_page)
@@ -206,7 +218,7 @@ class AutoBlueprint:
 
     def list(self, name):
         items = self.db.session.query(self.models[name]).all()
-        return render_template('bauto/list.html', title=f"List {name}")
+        return render_template('bauto/list.html', items=items, title=f"List {name}")
         
     def read(self, name, id):
         item = self.db.session.query(self.models[name]).get_or_404(id)
@@ -249,8 +261,18 @@ class AutoBlueprint:
             return redirect(self.url_prefix)
         return render_template('uxfab/form.html', form=form, title=f"Delete {name}")
 
+@dataclass
 class BullStack:
-    def __init__(self, name, blueprints):
+    name: str
+    blueprints: list
+    config_filename: str = None
+    tasks_enabled: bool = False
+    brand_name: str = None
+    logo: str = None
+    index_page: str = 'base.html'
+    index_redirect: bool = None
+
+    def create_app(self):
         import os
         from flask import Flask
         from flask_sqlalchemy import SQLAlchemy
@@ -259,19 +281,57 @@ class BullStack:
         from flask_iam import IAM
         #from sqlalchemy.orm import create_engine
         #engine = create_engine(DATABASE_URL, echo=True)
-        self.app = Flask(name)
+        self.app = Flask(self.name)
+
+        # App configuration
         self.app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
         self.app.config['SECRET_KEY'] = os.urandom(12).hex()
+        self.app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024 # max 50MB upload
+        if self.tasks_enabled:
+            self.app.config.from_mapping(
+                CELERY=dict(
+                    broker_url=os.environ.get("CELERY_BROKER_URL"),#'sqla+sqlite:////tmp/celery.db'
+                    result_backend=f"db+sqlite:///{os.path.join(self.app.instance_path,'shared/celery.db')}",
+                    #os.environ.get("CELERY_RESULT_BACKEND", "rpc://"),
+                    task_ignore_result=True,
+                ),
+            )
+        if self.config_filename:
+            self.app.config.from_pyfile(self.config_filename)
+
+        # Instance dir
+        if not os.path.exists(self.app.instance_path):
+            self.app.logger.warning(
+                'Instance path "%s" did not exist. Creating directory.',
+                self.app.instance_path
+            )
+            os.makedirs(self.app.instance_path)
+        
+        # App extensions
         fef = FEFset(frontend='bootstrap4')
+        if self.brand_name: fef.settings['brand_name'] = self.brand_name
+        if self.logo: fef.settings['logo_url'] = os.path.join('/static', self.logo)
         fef.init_app(self.app)
         uxf = UXFab()
         uxf.init_app(self.app)
         db = SQLAlchemy(self.app)
         iam = IAM(db)
         iam.init_app(self.app)
-        self.blueprints = blueprints
+
+        # Blueprint extensions
         for blueprint in self.blueprints:
             blueprint.init_app(self.app)
 
+        @self.app.errorhandler(500)
+        def internal_error(error):
+            return render_template('500.html'), 500
+         
+        @self.app.route('/', methods=['GET'])
+        def index():
+            if self.index_redirect: return redirect(self.index_redirect)
+            else: return render_template(self.index_page)
+
+        return self.app
+            
     def run(self, *args, **kwargs):
         return self.app.run(*args, **kwargs)
