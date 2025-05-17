@@ -8,10 +8,18 @@ from wtforms.validators import InputRequired, Optional
 from sqlalchemy import Table, Column, Integer, String, ForeignKey
 from sqlalchemy.orm import registry, relationship
 
+@dataclass
+class OneToManyList:
+    quantity: int
+    _self_reference_url: str
+
+    def __str__(self):
+        return str(self.quantity)
+
 class AutoBlueprint:
     def __init__(self, app=None, url_prefix=None, enable_crud=False, index_page='base.html'):
         self.name = self.__class__.__name__.lower()
-        self.url_prefix = f"/{url_prefix or self.name}"
+        self.url_prefix = '' if url_prefix is False else f"/{url_prefix or self.name}"
         self.url_routes = {}
         self.index_page = index_page
         self.register_models()
@@ -117,25 +125,63 @@ class AutoBlueprint:
         self.model_properties = {}
         for name, dm in self.datamodels:
             self.model_properties[name] = {}
-            columns = [
+            columns = {
+                colname[:-3] if colname.endswith('_id') else colname:
                 self.get_sqlalchemy_column(colname,coltype,name)
                 for colname, coltype in dm.__annotations__.items()
-                if not coltype is relationship
-            ]
+                if not coltype is relationship or colname.startswith('_')
+            }
+            table = Table(
+                name.lower(),
+                self.mapper_registry.metadata,
+                Column("id", Integer, primary_key=True),
+                *columns.values()
+            )
+
+            # One to many relationships for model
             for colname, coltype in dm.__annotations__.items():
                 if coltype is relationship:
                     self.model_properties[name][colname+'_list'] = (
                         getattr(dm, colname) or
                         relationship(colname.capitalize(), back_populates=name.lower())
                     )
-       
-            table = Table(
-                name.lower(),
-                self.mapper_registry.metadata,
-                Column("id", Integer, primary_key=True),
-                *columns
-            )
+                    columns[colname+'_list'] = None
+            
             self.mapper_registry.map_imperatively(dm, table, properties=self.model_properties[name])
+
+            # Set data headers and columns if not set at class definition
+            if not hasattr(dm, '_data_attributes'):
+                dm._data_attributes = columns.keys()
+            if not hasattr(dm, '_data_headers'):
+                dm._data_headers = [c.capitalize() for c in columns.keys()]
+            if not hasattr(dm, '_data_columns'):
+                dm._data_columns = property(
+                    lambda self: [
+                        OneToManyList(
+                            quantity = len(getattr(self,c)),
+                            _self_reference_url = f"{self._self_reference_url}/{c}"
+                        ) if c.endswith('_list') else
+                        getattr(self,c) for c in self._data_attributes
+                    ]
+                )
+
+            # Set self-reference url
+            dm._self_reference_url = property(
+                lambda self, url_prefix=self.url_prefix, model=name.lower():
+                f"{url_prefix}/{model}/read/{self.id}"
+            )
+            
+            # Set standard actions
+            if not hasattr(dm, '_actions'):
+                dm._actions = property(
+                    lambda self, url_prefix=self.url_prefix, model=name.lower():
+                    [
+                        (f"{url_prefix}/{model}/read/{self.id}", 'bi bi-zoom-in'),
+                        (f"{url_prefix}/{model}/update/{self.id}", 'bi bi-pencil'),
+                        (f"{url_prefix}/{model}/delete/{self.id}", 'bi bi-x-circle')
+                    ]
+                )
+            
             self.models[name.lower()] = dm
         
     def add_url_crud_rules(self):
@@ -157,6 +203,11 @@ class AutoBlueprint:
             # Read
             self.blueprint.add_url_rule(
                 f"/{name}/read/<int:id>", f"{name}_read", 
+                view_func=self.read, defaults={'name':name},
+                methods=['GET']
+            )
+            self.blueprint.add_url_rule(
+                f"/{name}/read/<int:id>/<list_attribute>", f"{name}_read", 
                 view_func=self.read, defaults={'name':name},
                 methods=['GET']
             )
@@ -220,13 +271,20 @@ class AutoBlueprint:
         items = self.db.session.query(self.models[name]).all()
         return render_template('bauto/list.html', items=items, title=f"List {name}")
         
-    def read(self, name, id):
+    def read(self, name, id, list_attribute=None):
         item = self.db.session.query(self.models[name]).get_or_404(id)
-        form = self.forms[name](obj=item)
-        form.submit.label.text = 'Info'
-        for field in form:
-            field.render_kw = {'disabled': 'disabled'}
-        return render_template('uxfab/form.html', form=form, title=f"Info {name}")
+        if list_attribute is None:
+            form = self.forms[name](obj=item)
+            form.submit.label.text = 'Info'
+            for field in form:
+                field.render_kw = {'disabled': 'disabled'}
+            return render_template('uxfab/form.html', form=form, title=f"Info {name}")
+        else: # Return list view of list attribute
+            return render_template(
+                'bauto/list.html',
+                items=getattr(item,list_attribute),
+                title=f"{list_attribute.capitalize()} of {name}"
+            )
 
     def update(self, name, id):
         item = self.db.session.query(self.models[name]).get_or_404(id)
@@ -332,6 +390,14 @@ class BullStack:
             else: return render_template(self.index_page)
 
         return self.app
+
+    def __call__(self, *args, run=False, **kwargs):
+        if run:
+            try: self.run(*args, **kwargs)
+            except AttributeError:
+                self.create_app()
+                self.run(*args, **kwargs)
+        else: return self.create_app()
             
     def run(self, *args, **kwargs):
         return self.app.run(*args, **kwargs)

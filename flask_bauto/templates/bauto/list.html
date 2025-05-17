@@ -12,17 +12,17 @@ href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.3.0/font/bootstrap-icons.cs
   <h1>{{ title }}</h1>
   <table class="table table-hover">
       {% for item in items %}
-      {% if loop.index == 1 and item.data_headers is defined %}
+      {% if loop.index == 1 and item._data_headers is defined %}
       <thead style="position: sticky; top: 0; background-color: white">
       <tr>
           <th scope="col">#</th>
-          {% for h in item.data_headers %}
+          {% for h in item._data_headers %}
           <th>{{ h }}</th>
           {% endfor %}
-          {% if item.actions is defined %}
+          {% if item._actions is defined %}
           <th></th>
           {% endif %}
-          {% if item.admin_actions is defined and current_user.role == 'admin' %}
+          {% if item._admin_actions is defined and current_user.role == 'admin' %}
           <th></th>
           {% endif %}
       </tr>
@@ -31,25 +31,34 @@ href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.3.0/font/bootstrap-icons.cs
       {% endif %}
       <tr>
           <th scope="row">{{ loop.index }}</th>
-          {% if item.data_columns is defined %}
-          {% for c in item.data_columns %}
-          <td>{{ c }}</td>
+          {% if item._data_columns is defined %}
+          {% for c in item._data_columns %}
+	    <td>
+	    {% if c._self_reference_url is defined %}
+	      <a href="{{ c._self_reference_url }}"
+		 style="display:block; color: black">
+	      {{ c }}
+	      </a>
+	    {% else %}
+	      {{ c }}
+	    {% endif %}
+            </td>
           {% endfor %}
           {% else %}
           <td>{{ item }}</td>
           {% endif %}
-          {% if item.actions is defined %}
+          {% if item._actions is defined %}
           <td>
-              {% for action in item.actions %}
+              {% for action in item._actions %}
               <a href="{{ action[0] }}">
               <i class="{{ action[1] }}"></i>
               </a>
               {% endfor %}
           </td>
           {% endif %}
-          {% if item.admin_actions is defined and current_user.role == 'admin' %}
+          {% if item._admin_actions is defined and current_user.role == 'admin' %}
           <td>
-              {% for action in item.admin_actions %}
+              {% for action in item._admin_actions %}
               <a href="{{ action[0] }}">
               <i class="{{ action[1] }}"></i>
               </a>
@@ -57,7 +66,7 @@ href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.3.0/font/bootstrap-icons.cs
           </td>
           {% endif %}
       </tr>
-      {% if loop.last and item.data_headers is defined %}
+      {% if loop.last and item._data_headers is defined %}
       </tbody>
       {% endif %}
       {% endfor %}
