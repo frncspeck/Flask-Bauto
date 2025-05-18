@@ -1,12 +1,32 @@
 import inspect
 from dataclasses import dataclass
 from collections import namedtuple
+from collections.abc import Callable
+import datetime
+from pathlib import Path
 from flask import Blueprint, render_template, redirect, flash, url_for
 from flask_wtf import FlaskForm
-from wtforms import Form, FormField, FieldList, StringField, EmailField, SubmitField, SelectField, BooleanField, IntegerField, FloatField
-from wtforms.validators import InputRequired, Optional
-from sqlalchemy import Table, Column, Integer, String, ForeignKey
+from wtforms import Form, FormField, Field, FieldList, StringField, TextAreaField, \
+    PasswordField, EmailField, SubmitField, SelectField, BooleanField, \
+    IntegerField, FloatField, DateTimeField, DateField, TimeField, FileField
+from wtforms.validators import InputRequired, DataRequired, Optional
+from sqlalchemy import Table, Column, Integer, String, ForeignKey, \
+    DateTime, Date, Time
 from sqlalchemy.orm import registry, relationship
+
+# Type definitions that also act as descriptors for use on instance instantiation
+# TODO refactor to work with BauType instead of sql and wtform separate mappings
+@dataclass
+class BauType:
+    db_type: type
+    ux_type: type
+    conversion_method: Callable = None
+    
+@dataclass
+class File(BauType):
+    storage_location: Path = None
+    db_type: type = String
+    ux_type: type = FileField
 
 @dataclass
 class OneToManyList:
@@ -16,6 +36,22 @@ class OneToManyList:
     def __str__(self):
         return str(self.quantity)
 
+# class DateTimeField(Field):
+#     def __init__(self, label=None, validators=None, **kwargs):
+#         super().__init__(label, validators, **kwargs)
+#         self.date_field = DateField(validators=[DataRequired()])
+#         self.time_field = TimeField(validators=[DataRequired()])
+
+#     def process_formdata(self, valuelist):
+#         if valuelist and len(valuelist) == 2:
+#             try:
+#                 date_value = datetime.strptime(valuelist[0], "%Y-%m-%d").date()
+#                 time_value = datetime.strptime(valuelist[1], "%H:%M").time()
+#                 self.data = datetime.combine(date_value, time_value)
+#             except ValueError:
+#                 self.data = None
+#                 raise ValueError("Invalid date/time format.")
+            
 class AutoBlueprint:
     def __init__(self, app=None, url_prefix=None, enable_crud=False, index_page='base.html'):
         self.name = self.__class__.__name__.lower()
@@ -69,7 +105,11 @@ class AutoBlueprint:
             int: IntegerField,
             float: FloatField,
             str: StringField,
-            bool: BooleanField
+            bool: BooleanField,
+            datetime.datetime: DateTimeField,
+            datetime.date: DateField,
+            datetime.time: TimeField,
+            File: FileField
         }
         return type_mapping[type]
 
@@ -77,7 +117,11 @@ class AutoBlueprint:
     def get_sqlalchemy_type(cls, type):
         type_mapping = {
             int: Integer,
-            str: String
+            str: String,
+            datetime.datetime: DateTime,
+            datetime.date: Date,
+            datetime.time: Time,
+            File: File.db_type
         }
         return type_mapping[type]
         
