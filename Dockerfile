@@ -12,6 +12,9 @@ WORKDIR /app
 # tracked files 
 RUN git config --global --add safe.directory /app
 
+# Dev tools
+RUN pip install build twine ipython
+
 # CSI code
 ENV TZ="Europe/Brussels"
 ENV PATH=/home/app/.local/bin/:$PATH

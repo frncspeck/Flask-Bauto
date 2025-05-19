@@ -8,10 +8,11 @@ exclude = ["docs*", "tests*"]
 
 [project]
 name = "Flask-Bauto"
-version = "0.0.9"
+version = "0.0.10"
 readme = "README.md"
 dependencies = [
   'Flask-FEFset',
   'Flask-UXFab',
-  'Flask-SQLAlchemy'
+  'Flask-SQLAlchemy',
+  'Flask-IAM'
 ]

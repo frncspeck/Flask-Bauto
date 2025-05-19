@@ -1,5 +1,6 @@
 from flask_bauto import AutoBlueprint, BullStack, dataclass, relationship, File
 from datetime import datetime, date
+from pathlib import Path
 
 class Test(AutoBlueprint):
     @dataclass
@@ -23,8 +24,8 @@ class Test(AutoBlueprint):
     class Species:
         genus_id: int
         name: str
-        recorded: date
-        experiment_file: File
+        #recorded: date
+        #experiment_file: Path
         
     def show_species(self) -> str:
         return f"{self.query.genus.get(1).species_list}"

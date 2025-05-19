@@ -36,11 +36,16 @@ href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.3.0/font/bootstrap-icons.cs
 	    <td>
 	    {% if c._self_reference_url is defined %}
 	      <a href="{{ c._self_reference_url }}"
-		 style="display:block; color: black">
+		 style="color: black">
 	      {{ c }}
 	      </a>
 	    {% else %}
 	      {{ c }}
+	    {% endif %}
+	    {% if c._add_action is defined %}
+	      <a href="{{ c._add_action }}">
+	      <i class="bi bi-clipboard-plus"></i>
+	      </a>
 	    {% endif %}
             </td>
           {% endfor %}

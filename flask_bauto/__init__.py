@@ -1,9 +1,8 @@
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections import namedtuple
 from collections.abc import Callable
 import datetime
-from pathlib import Path
 from flask import Blueprint, render_template, redirect, flash, url_for
 from flask_wtf import FlaskForm
 from wtforms import Form, FormField, Field, FieldList, StringField, TextAreaField, \
@@ -13,44 +12,7 @@ from wtforms.validators import InputRequired, DataRequired, Optional
 from sqlalchemy import Table, Column, Integer, String, ForeignKey, \
     DateTime, Date, Time
 from sqlalchemy.orm import registry, relationship
-
-# Type definitions that also act as descriptors for use on instance instantiation
-# TODO refactor to work with BauType instead of sql and wtform separate mappings
-@dataclass
-class BauType:
-    db_type: type
-    ux_type: type
-    conversion_method: Callable = None
-    
-@dataclass
-class File(BauType):
-    storage_location: Path = None
-    db_type: type = String
-    ux_type: type = FileField
-
-@dataclass
-class OneToManyList:
-    quantity: int
-    _self_reference_url: str
-
-    def __str__(self):
-        return str(self.quantity)
-
-# class DateTimeField(Field):
-#     def __init__(self, label=None, validators=None, **kwargs):
-#         super().__init__(label, validators, **kwargs)
-#         self.date_field = DateField(validators=[DataRequired()])
-#         self.time_field = TimeField(validators=[DataRequired()])
-
-#     def process_formdata(self, valuelist):
-#         if valuelist and len(valuelist) == 2:
-#             try:
-#                 date_value = datetime.strptime(valuelist[0], "%Y-%m-%d").date()
-#                 time_value = datetime.strptime(valuelist[1], "%H:%M").time()
-#                 self.data = datetime.combine(date_value, time_value)
-#             except ValueError:
-#                 self.data = None
-#                 raise ValueError("Invalid date/time format.")
+from flask_bauto.types import BauType, File, OneToManyList
             
 class AutoBlueprint:
     def __init__(self, app=None, url_prefix=None, enable_crud=False, index_page='base.html'):
@@ -99,37 +61,11 @@ class AutoBlueprint:
         cls = self.__class__
         return inspect.getmembers(cls, lambda x: inspect.isclass(x) and x is not type)
     
-    @classmethod
-    def get_wtform_type(cls, type):
-        type_mapping = {
-            int: IntegerField,
-            float: FloatField,
-            str: StringField,
-            bool: BooleanField,
-            datetime.datetime: DateTimeField,
-            datetime.date: DateField,
-            datetime.time: TimeField,
-            File: FileField
-        }
-        return type_mapping[type]
-
-    @classmethod
-    def get_sqlalchemy_type(cls, type):
-        type_mapping = {
-            int: Integer,
-            str: String,
-            datetime.datetime: DateTime,
-            datetime.date: Date,
-            datetime.time: Time,
-            File: File.db_type
-        }
-        return type_mapping[type]
-        
     def get_sqlalchemy_column(self, name, type, model):
         if name.endswith('_id') and name[:-3] in self.models and type is int:
             self.model_properties[model][name[:-3]] = relationship(name[:-3].capitalize())
             return Column(name, Integer, ForeignKey(name[:-3]+".id"))
-        else: return Column(name, self.get_sqlalchemy_type(type))
+        else: return Column(name, BauType.get_types()[type].db_type)
 
     def register_forms(self):
         self.forms = {}
@@ -154,7 +90,7 @@ class AutoBlueprint:
                     ModelForm,
                     fieldname,
                     # Primitive types
-                    self.get_wtform_type(fieldtype)(
+                    BauType.get_types()[fieldtype].ux_type(
                         fieldname.replace('_',' ').capitalize(),
                         validators=([] if fieldtype is bool else [InputRequired()])
                     )
@@ -203,16 +139,21 @@ class AutoBlueprint:
                     lambda self: [
                         OneToManyList(
                             quantity = len(getattr(self,c)),
-                            _self_reference_url = f"{self._self_reference_url}/{c}"
+                            _self_reference_url = f"{self._self_reference_url}/{c}",
+                            _add_action = f"{self._self_reference_add}/{c}"
                         ) if c.endswith('_list') else
                         getattr(self,c) for c in self._data_attributes
                     ]
                 )
 
-            # Set self-reference url
+            # Set self-reference urls
             dm._self_reference_url = property(
                 lambda self, url_prefix=self.url_prefix, model=name.lower():
                 f"{url_prefix}/{model}/read/{self.id}"
+            )
+            dm._self_reference_add = property(
+                lambda self, url_prefix=self.url_prefix, model=name.lower():
+                f"{url_prefix}/{model}/update/{self.id}/add"
             )
             
             # Set standard actions
@@ -258,6 +199,11 @@ class AutoBlueprint:
             # Update
             self.blueprint.add_url_rule(
                 f"/{name}/update/<int:id>", f"{name}_update", 
+                view_func=self.update, defaults={'name':name},
+                methods=['GET','POST']
+            )
+            self.blueprint.add_url_rule(
+                f"/{name}/update/<int:id>/add/<list_attribute>", f"{name}_update", 
                 view_func=self.update, defaults={'name':name},
                 methods=['GET','POST']
             )
@@ -308,7 +254,7 @@ class AutoBlueprint:
 
             flash(f"{name} instance was created")
 
-            return redirect(url_for(f"{self.name}_blueprint.{name}_read", id=item.id))
+            return redirect(url_for(f"{self.name}_blueprint.{name}_list"))
         return render_template('uxfab/form.html', form=form, title=f"Create {name}")
 
     def list(self, name):
@@ -330,25 +276,48 @@ class AutoBlueprint:
                 title=f"{list_attribute.capitalize()} of {name}"
             )
 
-    def update(self, name, id):
+    def update(self, name, id, list_attribute=None):
         item = self.db.session.query(self.models[name]).get_or_404(id)
-        form = self.forms[name](obj=item)
-        form.submit.label.text = 'Update'
-        if form.validate_on_submit():
-            # Make model instance
-            data = {
-                k:form.data[k]
-                for k in form.data.keys() - {'submit','csrf_token'}
-            }
-            for k in data:
-                setattr(item, k, data[k])
-            self.db.session.add(item)
-            self.db.session.commit()
+        if list_attribute:
+            list_model_name = list_attribute[:-len('_list')]
+            form = self.forms[list_model_name]()
+            # Delete field for main model reference field
+            delattr(form, name+'_id')
+            if form.validate_on_submit():
+                # Make model instance
+                data = {
+                    k:form.data[k]
+                    for k in form.data.keys() - {'submit','csrf_token'}
+                }
+                data[name+'_id'] = id
+                list_item = self.models[list_model_name](**data)
+                self.db.session.add(list_item)
+                self.db.session.commit()
+                
+                flash(f"{name} instance was created")
+                
+                return redirect(url_for(f"{self.name}_blueprint.{name}_list"))
+            name = list_attribute
 
-            flash(f"{name} instance was updated")
-
-            return redirect(url_for(f"{self.name}_blueprint.{name}_read", id=item.id))
-        return render_template('uxfab/form.html', form=form, title=f"Update {name}")
+        # Normal update
+        else:
+            form = self.forms[name](obj=item)
+            form.submit.label.text = 'Update'
+            if form.validate_on_submit():
+                # Make model instance
+                data = {
+                    k:form.data[k]
+                    for k in form.data.keys() - {'submit','csrf_token'}
+                }
+                for k in data:
+                    setattr(item, k, data[k])
+                self.db.session.add(item)
+                self.db.session.commit()
+                
+                flash(f"{name} instance was updated")
+                
+                return redirect(url_for(f"{self.name}_blueprint.{name}_read", id=item.id))
+        return render_template('uxfab/form.html', form=form, title=f"Update {name} for {item}")
 
     def delete (self, name, id):
         item = self.db.session.query(self.models[name]).get_or_404(id)
