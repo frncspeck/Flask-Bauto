@@ -15,8 +15,12 @@ from sqlalchemy.orm import registry, relationship
 from flask_bauto.types import BauType, File, OneToManyList
             
 class AutoBlueprint:
-    def __init__(self, app=None, url_prefix=None, enable_crud=False, index_page='base.html'):
+    def __init__(self, app=None, url_prefix=None, enable_crud=False, fair_data=True, forensics=False, protect_data=True, protect_index=False, index_page='base.html'):
         self.name = self.__class__.__name__.lower()
+        self.fair_data = fair_data
+        self.forensics = forensics # track user and time of modifications
+        self.protect = protect_data
+        self.protect_index = protect_index
         self.url_prefix = '' if url_prefix is False else f"/{url_prefix or self.name}"
         self.url_routes = {}
         self.index_page = index_page
@@ -111,6 +115,10 @@ class AutoBlueprint:
                 for colname, coltype in dm.__annotations__.items()
                 if not coltype is relationship or colname.startswith('_')
             }
+            if self.forensics:
+                from flask_login import current_user
+                columns['_user_id'] = Column('_user_id', Integer, default=lambda: current_user.id, nullable=False)
+                columns['_mod_datetime'] = Column('_mod_datetime', DateTime, default=datetime.datetime.now, nullable=False)
             table = Table(
                 name.lower(),
                 self.mapper_registry.metadata,
@@ -131,9 +139,9 @@ class AutoBlueprint:
 
             # Set data headers and columns if not set at class definition
             if not hasattr(dm, '_data_attributes'):
-                dm._data_attributes = columns.keys()
+                dm._data_attributes = [c for c in columns.keys() if not c.startswith('_')]
             if not hasattr(dm, '_data_headers'):
-                dm._data_headers = [c.capitalize() for c in columns.keys()]
+                dm._data_headers = [c.capitalize() for c in dm._data_attributes]
             if not hasattr(dm, '_data_columns'):
                 dm._data_columns = property(
                     lambda self: [
@@ -172,48 +180,57 @@ class AutoBlueprint:
     def add_url_crud_rules(self):
         for name in self.enable_crud:
             # Create
-            self.blueprint.add_url_rule(
+            self.add_url_rule(
                 f"/{name}/create", f"{name}_create", 
                 view_func=self.create, defaults={'name':name},
                 methods=['GET','POST']
             )
             self.url_routes[f"Create {name}"] = f"{self.url_prefix}/{name}/create"
             # List
-            self.blueprint.add_url_rule(
+            self.add_url_rule(
                 f"/{name}/list", f"{name}_list", 
                 view_func=self.list, defaults={'name':name},
-                methods=['GET']
+                methods=['GET'], protect=not(self.fair_data)
             )
             self.url_routes[f"List {name}"] = f"{self.url_prefix}/{name}/list"
             # Read
-            self.blueprint.add_url_rule(
+            self.add_url_rule(
                 f"/{name}/read/<int:id>", f"{name}_read", 
                 view_func=self.read, defaults={'name':name},
-                methods=['GET']
+                methods=['GET'], protect=not(self.fair_data)
             )
-            self.blueprint.add_url_rule(
+            self.add_url_rule(
                 f"/{name}/read/<int:id>/<list_attribute>", f"{name}_read", 
                 view_func=self.read, defaults={'name':name},
-                methods=['GET']
+                methods=['GET'], protect=not(self.fair_data)
             )
             # Update
-            self.blueprint.add_url_rule(
+            self.add_url_rule(
                 f"/{name}/update/<int:id>", f"{name}_update", 
                 view_func=self.update, defaults={'name':name},
                 methods=['GET','POST']
             )
-            self.blueprint.add_url_rule(
-                f"/{name}/update/<int:id>/add/<list_attribute>", f"{name}_update", 
+            self.add_url_rule(
+                f"/{name}/update/<int:id>/add/<list_attribute>", f"{name}_update_attribute", 
                 view_func=self.update, defaults={'name':name},
                 methods=['GET','POST']
             )
             # Delete
-            self.blueprint.add_url_rule(
+            self.add_url_rule(
                 f"/{name}/delete/<int:id>", f"{name}_delete", 
                 view_func=self.delete, defaults={'name':name},
                 methods=['GET','POST']
             )
 
+    def add_url_rule(self, *args, protect=None, **kwargs):
+        """Wrapper around blueprint.add_url_rule
+        adding protection if enabled on AutoBlueprint
+        """
+        from flask_iam import login_required
+        if protect in (None,True) and self.protect:
+            kwargs['view_func'] = login_required(kwargs['view_func'])
+        return self.blueprint.add_url_rule(*args, **kwargs)
+    
     def add_url_rules(self, methods=['GET','POST']):
         if self.index_page:
             self.blueprint.add_url_rule('/', 'index', view_func=self.index, methods=['GET'])
@@ -331,86 +348,3 @@ class AutoBlueprint:
 
             return redirect(self.url_prefix)
         return render_template('uxfab/form.html', form=form, title=f"Delete {name}")
-
-@dataclass
-class BullStack:
-    name: str
-    blueprints: list
-    config_filename: str = None
-    tasks_enabled: bool = False
-    brand_name: str = None
-    logo: str = None
-    index_page: str = 'base.html'
-    index_redirect: bool = None
-
-    def create_app(self):
-        import os
-        from flask import Flask
-        from flask_sqlalchemy import SQLAlchemy
-        from flask_fefset import FEFset
-        from flask_uxfab import UXFab
-        from flask_iam import IAM
-        #from sqlalchemy.orm import create_engine
-        #engine = create_engine(DATABASE_URL, echo=True)
-        self.app = Flask(self.name)
-
-        # App configuration
-        self.app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
-        self.app.config['SECRET_KEY'] = os.urandom(12).hex()
-        self.app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024 # max 50MB upload
-        if self.tasks_enabled:
-            self.app.config.from_mapping(
-                CELERY=dict(
-                    broker_url=os.environ.get("CELERY_BROKER_URL"),#'sqla+sqlite:////tmp/celery.db'
-                    result_backend=f"db+sqlite:///{os.path.join(self.app.instance_path,'shared/celery.db')}",
-                    #os.environ.get("CELERY_RESULT_BACKEND", "rpc://"),
-                    task_ignore_result=True,
-                ),
-            )
-        if self.config_filename:
-            self.app.config.from_pyfile(self.config_filename)
-
-        # Instance dir
-        if not os.path.exists(self.app.instance_path):
-            self.app.logger.warning(
-                'Instance path "%s" did not exist. Creating directory.',
-                self.app.instance_path
-            )
-            os.makedirs(self.app.instance_path)
-        
-        # App extensions
-        fef = FEFset(frontend='bootstrap4')
-        if self.brand_name: fef.settings['brand_name'] = self.brand_name
-        if self.logo: fef.settings['logo_url'] = os.path.join('/static', self.logo)
-        fef.init_app(self.app)
-        uxf = UXFab()
-        uxf.init_app(self.app)
-        db = SQLAlchemy(self.app)
-        iam = IAM(db)
-        iam.init_app(self.app)
-
-        # Blueprint extensions
-        for blueprint in self.blueprints:
-            blueprint.init_app(self.app)
-
-        @self.app.errorhandler(500)
-        def internal_error(error):
-            return render_template('500.html'), 500
-         
-        @self.app.route('/', methods=['GET'])
-        def index():
-            if self.index_redirect: return redirect(self.index_redirect)
-            else: return render_template(self.index_page)
-
-        return self.app
-
-    def __call__(self, *args, run=False, **kwargs):
-        if run:
-            try: self.run(*args, **kwargs)
-            except AttributeError:
-                self.create_app()
-                self.run(*args, **kwargs)
-        else: return self.create_app()
-            
-    def run(self, *args, **kwargs):
-        return self.app.run(*args, **kwargs)

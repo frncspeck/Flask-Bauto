@@ -1,4 +1,5 @@
-from flask_bauto import AutoBlueprint, BullStack, dataclass, relationship, File
+from flask_bauto import AutoBlueprint, dataclass, relationship, File
+from bull_stack import BullStack
 from datetime import datetime, date
 from pathlib import Path
 
@@ -27,10 +28,11 @@ class Test(AutoBlueprint):
         #recorded: date
         #experiment_file: Path
         
-    def show_species(self) -> str:
-        return f"{self.query.genus.get(1).species_list}"
+    def show_forensics(self) -> str:
+        g = self.query.genus.get(1)
+        return f"User id {g._user_id}, time of last mod {g._mod_datetime}"
 
-bs = BullStack(__name__, [Test(enable_crud=True,url_prefix=False)])
+bs = BullStack(__name__, [Test(enable_crud=True,url_prefix=False,forensics=True)])
 
 def create_app():
     return bs.create_app()

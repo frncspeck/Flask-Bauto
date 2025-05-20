@@ -22,7 +22,7 @@ ENV FLASK_APP=tests:create_app
 ENV FLASK_RUN_HOST=0.0.0.0
 
 COPY --chown=app:app . .
-RUN pip install .
+RUN pip install .[fullstack]
 
 EXPOSE 5000
 CMD ["flask", "run"]

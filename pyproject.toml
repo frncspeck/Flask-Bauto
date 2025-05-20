@@ -16,3 +16,10 @@ dependencies = [
   'Flask-SQLAlchemy',
   'Flask-IAM'
 ]
+
+[project.optional-dependencies]
+fullstack = ['Bull-Stack']
+dev = [
+  'build',
+  'twine',
+]
