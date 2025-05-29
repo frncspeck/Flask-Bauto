@@ -1,9 +1,11 @@
+import os
 import inspect
+from types import SimpleNamespace
 from dataclasses import dataclass, field
-from collections import namedtuple
 from collections.abc import Callable
 import datetime
-from flask import Blueprint, render_template, redirect, flash, url_for
+import logging
+from flask import Blueprint, render_template, redirect, flash, url_for, send_file
 from flask_wtf import FlaskForm
 from wtforms import Form, FormField, Field, FieldList, StringField, TextAreaField, \
     PasswordField, EmailField, SubmitField, SelectField, BooleanField, \
@@ -15,7 +17,10 @@ from sqlalchemy.orm import registry, relationship
 from flask_bauto.types import BauType, File, OneToManyList
             
 class AutoBlueprint:
-    def __init__(self, app=None, url_prefix=None, enable_crud=False, fair_data=True, forensics=False, protect_data=True, protect_index=False, index_page='base.html'):
+    def __init__(
+            self, app=None, url_prefix=None, enable_crud=False,
+            fair_data=True, forensics=False, protect_data=True,
+            imex=True, protect_index=False, index_page='base.html'):
         self.name = self.__class__.__name__.lower()
         self.fair_data = fair_data
         self.forensics = forensics # track user and time of modifications
@@ -24,6 +29,14 @@ class AutoBlueprint:
         self.url_prefix = '' if url_prefix is False else f"/{url_prefix or self.name}"
         self.url_routes = {}
         self.index_page = index_page
+        if imex:
+            self._import_route = True
+            self._export_route = True
+
+        # Set up logging
+        self.logger = logging.getLogger(self.name)
+
+        # Register models and forms
         self.register_models()
         self.register_forms()
 
@@ -63,9 +76,25 @@ class AutoBlueprint:
     @property
     def datamodels(self):
         cls = self.__class__
-        return inspect.getmembers(cls, lambda x: inspect.isclass(x) and x is not type)
+        try: cls_code = inspect.getsource(cls)
+        except OSError:
+            #from IPython.core.oinspect import getsource
+            cls_code = '' #getsource(cls)
+        datamodels = inspect.getmembers(cls, lambda x: inspect.isclass(x) and x is not type)
+        def linenumber_of_member(m):
+            try:
+                return m[1].__class__.__code__.co_firstlineno
+            except AttributeError:
+                return -1
+        if cls_code: datamodels.sort(key=lambda x: cls_code.index(f"class {x[0]}:"))
+        else:
+            self.logger.warning(
+                'Interactive defined blueprints might not have functional relationships'
+            )
+        return datamodels
     
     def get_sqlalchemy_column(self, name, type, model):
+        #self.app.logger.debug(name, type, model)
         if name.endswith('_id') and name[:-3] in self.models and type is int:
             self.model_properties[model][name[:-3]] = relationship(name[:-3].capitalize())
             return Column(name, Integer, ForeignKey(name[:-3]+".id"))
@@ -110,7 +139,7 @@ class AutoBlueprint:
         for name, dm in self.datamodels:
             self.model_properties[name] = {}
             columns = {
-                colname[:-3] if colname.endswith('_id') else colname:
+                colname:
                 self.get_sqlalchemy_column(colname,coltype,name)
                 for colname, coltype in dm.__annotations__.items()
                 if not coltype is relationship or colname.startswith('_')
@@ -138,10 +167,12 @@ class AutoBlueprint:
             self.mapper_registry.map_imperatively(dm, table, properties=self.model_properties[name])
 
             # Set data headers and columns if not set at class definition
-            if not hasattr(dm, '_data_attributes'):
-                dm._data_attributes = [c for c in columns.keys() if not c.startswith('_')]
+            if not hasattr(dm, '_data_raw_attributes'): # db column names
+                dm._data_raw_attributes = [c for c in columns.keys() if not c.startswith('_')]
+            if not hasattr(dm, '_data_attributes'): # db column names
+                dm._data_attributes = [c[:-3] if c.endswith('_id') else c for c in dm._data_raw_attributes]
             if not hasattr(dm, '_data_headers'):
-                dm._data_headers = [c.capitalize() for c in dm._data_attributes]
+                dm._data_headers = [c.replace('_',' ').capitalize() for c in dm._data_attributes]
             if not hasattr(dm, '_data_columns'):
                 dm._data_columns = property(
                     lambda self: [
@@ -221,6 +252,26 @@ class AutoBlueprint:
                 view_func=self.delete, defaults={'name':name},
                 methods=['GET','POST']
             )
+            # Export rule
+            if self._export_route:
+                self.add_url_rule(
+                    f"/{name}/export", f"{name}_export", 
+                    view_func=self.export_route, defaults={'name':name},
+                    methods=['GET']
+                )
+        # Full import rule
+        if self._import_route:
+            self.add_url_rule(
+                '/import/db', 'import_db', 
+                view_func=self.import_all_route,
+                methods=['GET','POST']
+            )
+        # Full export rule
+        if self._export_route:
+            self.add_url_rule(
+                f"/fullexport", 'full_export', 
+                view_func=self.export_all_route, methods=['GET']
+            )
 
     def add_url_rule(self, *args, protect=None, **kwargs):
         """Wrapper around blueprint.add_url_rule
@@ -249,8 +300,9 @@ class AutoBlueprint:
     # Database utilities
     @property
     def query(self):
-        nt = namedtuple('QueryModels', self.models.keys())
-        return nt(*(self.db.session.query(model) for model in self.models.values()))
+        return SimpleNamespace(**{
+            key:self.db.session.query(model) for key,model in self.models.items(
+        )})
     
     # Predefined views without annotation as they are automatically added
     def index(self):
@@ -348,3 +400,92 @@ class AutoBlueprint:
 
             return redirect(self.url_prefix)
         return render_template('uxfab/form.html', form=form, title=f"Delete {name}")
+
+    def export_model(self, name):
+        import csv
+        import tempfile
+        fp = tempfile.NamedTemporaryFile(suffix=f"_{name}.csv", mode='wt', delete_on_close=False)
+        csvwriter = csv.writer(fp, delimiter = ',')
+        # Get attributes
+        model = self.models[name]
+        columns = [
+            a for a in model._data_raw_attributes
+            if not a.endswith('_list') # skip one2many relationships
+        ]
+        if self.forensics:
+            columns = ['id'] + columns + ['_user_id', '_mod_datetime']
+        csvwriter.writerow(columns) # column names
+        for record in getattr(self.query, name).all():
+            csvwriter.writerow([getattr(record,a) for a in columns])
+        fp.close()
+        return fp
+
+    def export_route(self, name, delete_tmp=True):
+        fp = self.export_model(name)
+        response = send_file(
+            fp.name, mimetype='text/csv', download_name=f"{name}_export.csv",
+            as_attachment=True
+        )
+        if delete_tmp:
+            os.unlink(fp.name)
+        return response
+
+    def export_all_route(self, delete_tmp=True):
+        import tempfile
+        import zipfile
+        with tempfile.NamedTemporaryFile(suffix='.zip', delete_on_close=False) as fp_zip:
+            fp_zip.close()
+            with zipfile.ZipFile(fp_zip.name, 'w') as ziparc:
+                for model_name in self.models:
+                    fp = self.export_model(model_name)
+                    ziparc.write(fp.name, arcname=f"{model_name}.csv")
+                    if delete_tmp:
+                        os.unlink(fp.name)
+            return send_file(
+                fp_zip.name, mimetype='application/zip',
+                download_name=f"{self.name}_full_export.zip",
+                as_attachment=True
+            )
+
+    def import_model(self, name, fp_csv):
+        model = self.models[name]
+        columns = fp_csv.readline().strip().split(',')
+        if self.forensics:
+            forenkeys = {
+                'id':int,
+                '_user_id':int,
+                '_mod_datetime':datetime.datetime.fromisoformat
+            }
+        for line in fp_csv:
+            record = dict(zip(columns,line.strip().split(',')))
+            if self.forensics:
+                item = model(**{
+                    k:model.__annotations__[k](v) for k,v in record.items()
+                    if k not in forenkeys
+                })
+                for fkey in forenkeys:
+                    setattr(item, fkey, forenkeys[fkey](record[fkey]))
+            else:
+                item = model(**{
+                    k:model.__annotations__[k](v) for k,v in record.items()
+                })
+            self.db.session.add(item)
+        self.db.session.commit()
+
+    def import_all_route(self):
+        class FileForm(FlaskForm):
+            zip_archive = FileField()
+            submit = SubmitField()
+        form = FileForm()
+        if form.validate_on_submit():
+            import zipfile
+            import io
+            with zipfile.ZipFile(form.zip_archive.data.stream) as ziparc:
+                for model_name in self.models:
+                    fp_csv = ziparc.open(f"{model_name}.csv")
+                    self.import_model(model_name, io.TextIOWrapper(fp_csv))
+            return redirect('/')
+        else:
+            return render_template(
+                'uxfab/form.html', form=form, title='Import db'
+            )

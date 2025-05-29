@@ -27,6 +27,12 @@ class Test(AutoBlueprint):
         name: str
         #recorded: date
         #experiment_file: Path
+
+    @dataclass
+    class Crop:
+        species_id: int
+        name: str
+        description: str = None
         
     def show_forensics(self) -> str:
         g = self.query.genus.get(1)
