@@ -17,10 +17,12 @@ from sqlalchemy.orm import registry, relationship
 from flask_bauto.types import BauType, File, OneToManyList
             
 class AutoBlueprint:
+    registry = registry()
+    
     def __init__(
-            self, app=None, url_prefix=None, enable_crud=False,
-            fair_data=True, forensics=False, protect_data=True,
-            imex=True, protect_index=False, index_page='base.html'):
+            self, app=None, registry=None, url_prefix=None, enable_crud=False,
+            fair_data=True, forensics=False, protect_data=True, imex=True,
+            protect_index=False, index_page='base.html'):
         self.name = self.__class__.__name__.lower()
         self.fair_data = fair_data
         self.forensics = forensics # track user and time of modifications
@@ -36,6 +38,11 @@ class AutoBlueprint:
         # Set up logging
         self.logger = logging.getLogger(self.name)
 
+        # Set up registry
+        self.mapper_registry = registry or self.registry
+        # To allow sibling AutoBlueprint's to find models in each other's namespaces
+        # a registry is defined during the AutoBlueprint definition
+        
         # Register models and forms
         self.register_models()
         self.register_forms()
@@ -73,9 +80,8 @@ class AutoBlueprint:
                 'If this is unintended, be sure to init "fefset" before extension'
             )
 
-    @property
-    def datamodels(self):
-        cls = self.__class__
+    @classmethod
+    def defined_models(cls):
         try: cls_code = inspect.getsource(cls)
         except OSError:
             #from IPython.core.oinspect import getsource
@@ -92,10 +98,25 @@ class AutoBlueprint:
                 'Interactive defined blueprints might not have functional relationships'
             )
         return datamodels
-    
+
+    @classmethod
+    def all_defined_models(cls):
+        datamodels = []
+        for subcls in cls.__base__.__subclasses__():
+            datamodels += list(subcls.defined_models())
+        return datamodels
+
+    @property
+    def datamodels(self):
+        return self.defined_models()
+
+    @property
+    def all_models(self):
+        return {n.lower():c for n,c in self.all_defined_models()}
+        
     def get_sqlalchemy_column(self, name, type, model):
         #self.app.logger.debug(name, type, model)
-        if name.endswith('_id') and name[:-3] in self.models and type is int:
+        if name.endswith('_id') and name[:-3] in self.all_models and type is int:
             self.model_properties[model][name[:-3]] = relationship(name[:-3].capitalize())
             return Column(name, Integer, ForeignKey(name[:-3]+".id"))
         else: return Column(name, BauType.get_types()[type].db_type)
@@ -108,8 +129,8 @@ class AutoBlueprint:
 
             for fieldname, fieldtype in dm.__annotations__.items():
                 if fieldtype is relationship: continue
-                elif fieldname.endswith('_id') and fieldname[:-3] in self.models:
-                    model = self.models[fieldname[:-3]]
+                elif fieldname.endswith('_id') and fieldname[:-3] in self.all_models:
+                    model = self.all_models[fieldname[:-3]]
                     setattr(
                         ModelForm,
                         fieldname,
@@ -130,10 +151,9 @@ class AutoBlueprint:
                 )
             setattr(ModelForm, 'submit', SubmitField(f'Submit "{name}"'))
             self.forms[name.lower()] = ModelForm
-    
+
     def register_models(self):
         cls = self.__class__
-        self.mapper_registry = registry()
         self.models = {}
         self.model_properties = {}
         for name, dm in self.datamodels:

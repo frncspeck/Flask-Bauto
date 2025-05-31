@@ -28,6 +28,7 @@ class Test(AutoBlueprint):
         #recorded: date
         #experiment_file: Path
 
+class OtherTest(AutoBlueprint):
     @dataclass
     class Crop:
         species_id: int
@@ -35,10 +36,13 @@ class Test(AutoBlueprint):
         description: str = None
         
     def show_forensics(self) -> str:
-        g = self.query.genus.get(1)
-        return f"User id {g._user_id}, time of last mod {g._mod_datetime}"
+        c = self.query.crop.get(1)
+        return f"User id {c._user_id}, time of last mod {c._mod_datetime}"
 
-bs = BullStack(__name__, [Test(enable_crud=True,url_prefix=False,forensics=True)])
+bs = BullStack(__name__, [
+    Test(enable_crud=True,url_prefix=False,forensics=False),
+    OtherTest(enable_crud=True,forensics=True)
+])
 
 def create_app():
     return bs.create_app()
