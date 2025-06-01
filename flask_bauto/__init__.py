@@ -17,10 +17,10 @@ from sqlalchemy.orm import registry, relationship
 from flask_bauto.types import BauType, File, OneToManyList
             
 class AutoBlueprint:
-    registry = registry()
+    #registry = registry()
     
     def __init__(
-            self, app=None, registry=None, url_prefix=None, enable_crud=False,
+            self, app=None, registry=registry(), url_prefix=None, enable_crud=False,
             fair_data=True, forensics=False, protect_data=True, imex=True,
             protect_index=False, index_page='base.html'):
         self.name = self.__class__.__name__.lower()
@@ -39,7 +39,7 @@ class AutoBlueprint:
         self.logger = logging.getLogger(self.name)
 
         # Set up registry
-        self.mapper_registry = registry or self.registry
+        self.mapper_registry = registry# or self.registry
         # To allow sibling AutoBlueprint's to find models in each other's namespaces
         # a registry is defined during the AutoBlueprint definition
         
