@@ -17,12 +17,64 @@ from sqlalchemy.orm import registry, relationship
 from flask_bauto.types import BauType, File, OneToManyList
             
 class AutoBlueprint:
-    #registry = registry()
+    """An automated blueprint for flask based on inner dataclass definitions
+
+    The `AutoBlueprint` was created to avoid conceptual code duplication
+    between creating `sqlalchemy` database classes and `wtforms` forms.
+    Simply by using annotated (type-hinted) inner dataclasses from classes
+    inheriting from this class, all necessary components are made dynamically.
+
+    Attributes
+    ----------
+    name : str
+        the blueprint name, made available as app extension and used in route
+    fair_data : bool
+        if True, all data of blueprint is readable (default True)
+    forensics : bool
+        if True, track time and user of data table modifications (default False)
+    protect_data : bool
+        if True, only registered users can add/modify data
+    url_prefix : str
+        the prefix used for the blueprint
+    url_routes : dict
+        names and routes dict
+    index_page : str
+        html template for blueprint index
+    _import_route : bool
+        enable db import
+    _export_route : bool
+        enable db export
+
+    Methods
+    -------
+    init_app(app)
+        initializes the Flask app
+        
+    """
     
     def __init__(
             self, app=None, registry=registry(), url_prefix=None, enable_crud=False,
             fair_data=True, forensics=False, protect_data=True, imex=True,
             protect_index=False, index_page='base.html'):
+        """
+        Parameters
+        ----------
+        name : str
+            the blueprint name, made available as app extension and used in route
+        fair_data : bool
+            if True, all data of blueprint is readable (default True)
+        forensics : bool
+            if True, track time and user of data table modifications (default False)
+        protect_data : bool
+            if True, only registered users can add/modify data
+        url_prefix : str
+            the prefix used for the blueprint
+        url_routes : dict
+            names and routes dict
+        index_page : str
+            html template for blueprint index        
+        """
+        
         self.name = self.__class__.__name__.lower()
         self.fair_data = fair_data
         self.forensics = forensics # track user and time of modifications
@@ -60,6 +112,17 @@ class AutoBlueprint:
             self.add_url_crud_rules()
 
     def init_app(self, app):
+        """
+        Parameters
+        ----------
+        app : flask.Flask
+            Flask application
+
+        Raises
+        ------
+        Warning
+            If no frontend fefset extension is detected, raises a warning
+        """
         app.extensions[self.name] = self
         app.register_blueprint(
             self.blueprint, url_prefix=self.url_prefix
@@ -82,6 +145,12 @@ class AutoBlueprint:
 
     @classmethod
     def defined_models(cls):
+        """
+        Returns
+        -------
+        list
+            a list of strings representing the data models
+        """
         try: cls_code = inspect.getsource(cls)
         except OSError:
             #from IPython.core.oinspect import getsource
@@ -94,7 +163,8 @@ class AutoBlueprint:
                 return -1
         if cls_code: datamodels.sort(key=lambda x: cls_code.index(f"class {x[0]}:"))
         else:
-            self.logger.warning(
+            import warnings
+            warnings.warn(
                 'Interactive defined blueprints might not have functional relationships'
             )
         return datamodels
@@ -108,7 +178,12 @@ class AutoBlueprint:
 
     @property
     def datamodels(self):
-        return self.defined_models()
+        from collections import OrderedDict
+        datamodels = OrderedDict([
+            (self.camel_to_snake(name), dm)
+            for name, dm in self.defined_models()
+        ])
+        return datamodels
 
     @property
     def all_models(self):
@@ -117,18 +192,18 @@ class AutoBlueprint:
     def get_sqlalchemy_column(self, name, type, model):
         #self.app.logger.debug(name, type, model)
         if name.endswith('_id') and name[:-3] in self.all_models and type is int:
-            self.model_properties[model][name[:-3]] = relationship(name[:-3].capitalize())
+            self.model_properties[model][name[:-3]] = relationship(self.snake_to_camel(name[:-3]))
             return Column(name, Integer, ForeignKey(name[:-3]+".id"))
         else: return Column(name, BauType.get_types()[type].db_type)
 
     def register_forms(self):
         self.forms = {}
-        for name, dm in self.datamodels:
+        for name, dm in self.datamodels.items():
             class ModelForm(FlaskForm):
                 pass
 
             for fieldname, fieldtype in dm.__annotations__.items():
-                if fieldtype is relationship: continue
+                if fieldtype == list[int]: continue
                 elif fieldname.endswith('_id') and fieldname[:-3] in self.all_models:
                     model = self.all_models[fieldname[:-3]]
                     setattr(
@@ -156,13 +231,13 @@ class AutoBlueprint:
         cls = self.__class__
         self.models = {}
         self.model_properties = {}
-        for name, dm in self.datamodels:
+        for name, dm in self.datamodels.items():
             self.model_properties[name] = {}
             columns = {
                 colname:
                 self.get_sqlalchemy_column(colname,coltype,name)
                 for colname, coltype in dm.__annotations__.items()
-                if not coltype is relationship or colname.startswith('_')
+                if coltype != list[int] or colname.startswith('_')
             }
             if self.forensics:
                 from flask_login import current_user
@@ -177,10 +252,13 @@ class AutoBlueprint:
 
             # One to many relationships for model
             for colname, coltype in dm.__annotations__.items():
-                if coltype is relationship:
+                if coltype == list[int]:
                     self.model_properties[name][colname+'_list'] = (
                         getattr(dm, colname) or
-                        relationship(colname.capitalize(), back_populates=name.lower())
+                        relationship(
+                            self.snake_to_camel(colname),
+                            back_populates=name.lower()
+                        )
                     )
                     columns[colname+'_list'] = None
             
@@ -509,3 +587,30 @@ class AutoBlueprint:
             return render_template(
                 'uxfab/form.html', form=form, title='Import db'
             )
+
+    #Utility functions
+    @staticmethod
+    def snake_to_camel(snake_str, lowerCamelCase=False):
+        if lowerCamelCase:
+            components = snake_str.split('_')
+            return components[0] + ''.join(
+                word.capitalize() for word in components[1:]
+            )
+        else:
+            return ''.join(word.capitalize() for word in snake_str.split('_'))
+    
+    @staticmethod
+    def camel_to_snake(camel_str):
+        import re
+        # https://stackoverflow.com/questions/1175208/elegant-python-function-to-convert-camelcase-to-snake-case
+        pattern = re.compile(
+            r"""
+            (?<=[a-z])      # preceded by lowercase
+            (?=[A-Z])       # followed by uppercase
+            |               #   OR
+            (?<=[A-Z])      # preceded by uppercase
+            (?=[A-Z][a-z])  # followed by uppercase, then lowercase
+            """,
+            re.X,
+        )
+        return pattern.sub('_', camel_str).lower()        

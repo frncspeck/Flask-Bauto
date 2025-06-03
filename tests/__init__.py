@@ -8,8 +8,8 @@ class Test(AutoBlueprint):
     class Genus:
         name: str
         family: str
-        species: relationship = None
-        #species: relationship = relationship('Species', back_populates='genus', cascade="all, delete-orphan")
+        species: list[int] = None
+        #species: list[int] = relationship('Species', back_populates='genus', cascade="all, delete-orphan")
 
         def __str__(self):
             return self.name
@@ -34,6 +34,12 @@ class OtherTest(AutoBlueprint):
         species_id: int
         name: str
         description: str = None
+        crop_variety: list[int] = None
+
+    @dataclass
+    class CropVariety:
+        crop_id: int
+        name: str
         
     def show_forensics(self) -> str:
         c = self.query.crop.get(1)
