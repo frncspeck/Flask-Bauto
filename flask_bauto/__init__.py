@@ -1,6 +1,7 @@
 import os
 import inspect
 from types import SimpleNamespace
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from collections.abc import Callable
 import datetime
@@ -167,27 +168,27 @@ class AutoBlueprint:
             warnings.warn(
                 'Interactive defined blueprints might not have functional relationships'
             )
+        # Transform into ordereddict
+        datamodels = OrderedDict([
+            (cls.camel_to_snake(name), dm)
+            for name, dm in datamodels
+        ])
         return datamodels
 
     @classmethod
     def all_defined_models(cls):
-        datamodels = []
+        datamodels = OrderedDict()
         for subcls in cls.__base__.__subclasses__():
-            datamodels += list(subcls.defined_models())
+            datamodels.update(subcls.defined_models())
         return datamodels
 
     @property
     def datamodels(self):
-        from collections import OrderedDict
-        datamodels = OrderedDict([
-            (self.camel_to_snake(name), dm)
-            for name, dm in self.defined_models()
-        ])
-        return datamodels
+        return self.defined_models()
 
     @property
     def all_models(self):
-        return {n.lower():c for n,c in self.all_defined_models()}
+        return self.all_defined_models()
         
     def get_sqlalchemy_column(self, name, type, model):
         #self.app.logger.debug(name, type, model)
