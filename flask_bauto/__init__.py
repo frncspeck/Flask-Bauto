@@ -3,7 +3,6 @@ import inspect
 from types import SimpleNamespace
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from collections.abc import Callable
 import datetime
 import logging
 from flask import Blueprint, render_template, redirect, flash, url_for, send_file
@@ -33,8 +32,10 @@ class AutoBlueprint:
         if True, all data of blueprint is readable (default True)
     forensics : bool
         if True, track time and user of data table modifications (default False)
-    protect_data : bool
-        if True, only registered users can add/modify data
+    protect : bool | str | None
+        if True, only registered users can add/modify data, if provided as a str
+        only users with the specified role. False or None should only be used
+        for testing
     url_prefix : str
         the prefix used for the blueprint
     url_routes : dict
@@ -66,7 +67,7 @@ class AutoBlueprint:
             if True, all data of blueprint is readable (default True)
         forensics : bool
             if True, track time and user of data table modifications (default False)
-        protect_data : bool
+        protect_data : bool | str | None
             if True, only registered users can add/modify data
         url_prefix : str
             the prefix used for the blueprint
@@ -376,9 +377,14 @@ class AutoBlueprint:
         """Wrapper around blueprint.add_url_rule
         adding protection if enabled on AutoBlueprint
         """
-        from flask_iam import login_required
-        if protect in (None,True) and self.protect:
-            kwargs['view_func'] = login_required(kwargs['view_func'])
+        from flask_iam import login_required, role_required
+        if (protect in (None,True) or isinstance(protect,str)) and self.protect:
+            if isinstance(protect,str): # Custom set role protection
+                kwargs['view_func'] = role_required(protect)(kwargs['view_func'])
+            elif isinstance(self.protect,str): # Blueprint level role protection
+                kwargs['view_func'] = role_required(self.protect)(kwargs['view_func'])
+            else: # Standard login_required protection
+                kwargs['view_func'] = login_required(kwargs['view_func'])
         return self.blueprint.add_url_rule(*args, **kwargs)
     
     def add_url_rules(self, methods=['GET','POST']):

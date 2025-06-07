@@ -6,6 +6,11 @@ from collections.abc import Callable
 from pathlib import Path
 import datetime
 
+# Python types
+from typing import Annotated, get_origin, get_args, get_type_hints
+#type markdown = Annotated[str, {'max_size':255}] # TODO 3.12+ type declaration
+markdown = Annotated[str, {'max_size':255}] # TODO 3.12+ type declaration
+
 # Form types
 import wtforms as wtf
 
@@ -72,11 +77,24 @@ class Time(BauType):
 
 @dataclass
 class File(BauType):
-    storage_location: Path = None
+    storage_location: Path = None # TODO could be a specifier of py_type or in db
     py_type: type = Path
     db_type: type = sa.String
     ux_type: type = wtf.FileField
 
+@dataclass
+class JSON(BauType):
+    py_type: type = dict
+    db_type: type = sa.JSON
+    ux_type: type = wtf.FormField
+    
+@dataclass
+class Task(BauType):
+    py_type: type = callable
+    db_type: type = sa.JSON
+    # For this type the ux_type is intended for display and not input
+    ux_type: type = wtf.TextAreaField
+    
 @dataclass
 class OneToManyList:
     quantity: int
