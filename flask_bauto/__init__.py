@@ -2,7 +2,7 @@ import os
 import inspect
 from types import SimpleNamespace
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, MISSING
 import datetime
 import logging
 from flask import Blueprint, render_template, redirect, flash, url_for, send_file
@@ -138,7 +138,9 @@ class AutoBlueprint:
             fef = app.extensions['fefset']
             fef.add_submenu(self.name)
             for name, route in self.url_routes.items():
-                fef.add_menu_entry(name, route, submenu=self.name)
+                fef.add_menu_entry(
+                    name, route['route'], submenu=self.name, role=route['role']
+                )
         else:
             app.logger.warning(
                 'Frontend not available, operating in headless mode.'
@@ -191,13 +193,28 @@ class AutoBlueprint:
     def all_models(self):
         return self.all_defined_models()
         
-    def get_sqlalchemy_column(self, name, type, model):
-        #self.app.logger.debug(name, type, model)
+    def get_sqlalchemy_column(self, name, type, model_name, model):
+        #self.app.logger.debug(name, type, model_name)
+        default = self.get_default(model, name)
         if name.endswith('_id') and name[:-3] in self.all_models and type is int:
-            self.model_properties[model][name[:-3]] = relationship(self.snake_to_camel(name[:-3]))
-            return Column(name, Integer, ForeignKey(name[:-3]+".id"))
-        else: return Column(name, BauType.get_types()[type].db_type)
+            self.model_properties[model_name][name[:-3]] = relationship(self.snake_to_camel(name[:-3]))
+            return Column(
+                name, Integer, ForeignKey(name[:-3]+".id"),
+                nullable = True if default is None else False
+            )
+        else: return Column(
+                name, BauType.get_types()[type].db_type,
+                default = None if default is MISSING else default,
+                nullable = True if default is None else False
+        )
 
+    def get_default(self, model, fieldname):
+        return (
+            model.__dataclass_fields__[fieldname].default if
+            model.__dataclass_fields__[fieldname].default != MISSING
+            else model.__dataclass_fields__[fieldname].default_factory
+        )
+    
     def register_forms(self):
         self.forms = {}
         for name, dm in self.datamodels.items():
@@ -205,6 +222,7 @@ class AutoBlueprint:
                 pass
 
             for fieldname, fieldtype in dm.__annotations__.items():
+                default_value = self.get_default(dm, fieldname)
                 if fieldtype == list[int]: continue
                 elif fieldname.endswith('_id') and fieldname[:-3] in self.all_models:
                     model = self.all_models[fieldname[:-3]]
@@ -216,14 +234,19 @@ class AutoBlueprint:
                             # lambda required default model as otherwise the last reference to model is used
                             choices=lambda model=model: [(i.id,i) for i in self.db.session.query(model).all()]
                         )
-                    )
+                    ) # TODO allow blank option if default is None
                 else: setattr(
                     ModelForm,
                     fieldname,
                     # Primitive types
                     BauType.get_types()[fieldtype].ux_type(
                         fieldname.replace('_',' ').capitalize(),
-                        validators=([] if fieldtype is bool else [InputRequired()])
+                        validators=(
+                            [] if fieldtype is bool else [
+                                Optional() if default_value is None else InputRequired()
+                            ]
+                        ),
+                        default=None if default_value is MISSING else default_value
                     )
                 )
             setattr(ModelForm, 'submit', SubmitField(f'Submit "{name}"'))
@@ -237,7 +260,7 @@ class AutoBlueprint:
             self.model_properties[name] = {}
             columns = {
                 colname:
-                self.get_sqlalchemy_column(colname,coltype,name)
+                self.get_sqlalchemy_column(colname,coltype,name,dm)
                 for colname, coltype in dm.__annotations__.items()
                 if coltype != list[int] or colname.startswith('_')
             }
@@ -316,14 +339,20 @@ class AutoBlueprint:
                 view_func=self.create, defaults={'name':name},
                 methods=['GET','POST']
             )
-            self.url_routes[f"Create {name}"] = f"{self.url_prefix}/{name}/create"
+            self.url_routes[f"Create {name}"] = {
+                'route':f"{self.url_prefix}/{name}/create",
+                'role':f"{self.name}_admin"
+            }
             # List
             self.add_url_rule(
                 f"/{name}/list", f"{name}_list", 
                 view_func=self.list, defaults={'name':name},
                 methods=['GET'], protect=not(self.fair_data)
             )
-            self.url_routes[f"List {name}"] = f"{self.url_prefix}/{name}/list"
+            self.url_routes[f"List {name}"] = {
+                'route': f"{self.url_prefix}/{name}/list",
+                'role': False
+            }
             # Read
             self.add_url_rule(
                 f"/{name}/read/<int:id>", f"{name}_read", 
@@ -390,7 +419,7 @@ class AutoBlueprint:
     def add_url_rules(self, methods=['GET','POST']):
         if self.index_page:
             self.blueprint.add_url_rule('/', 'index', view_func=self.index, methods=['GET'])
-            self.url_routes[self.name] = f"{self.url_prefix}/"
+            self.url_routes[self.name] = {'route': f"{self.url_prefix}/", 'role': False}
         cls = self.__class__
         viewfunctions = inspect.getmembers(
             cls,
@@ -400,7 +429,7 @@ class AutoBlueprint:
         )
         for name, viewfunction in viewfunctions:
             self.blueprint.add_url_rule(f"/{name}", name, view_func=viewfunction, methods=['GET'], defaults={'self':self})
-            self.url_routes[name] = f"{self.url_prefix}/{name}"
+            self.url_routes[name] = {'route': f"{self.url_prefix}/{name}", 'role': False}
 
     # Database utilities
     @property
@@ -483,6 +512,13 @@ class AutoBlueprint:
                     k:form.data[k]
                     for k in form.data.keys() - {'submit','csrf_token'}
                 }
+                if self.forensics:
+                    self.logger.info(
+                        'Updating %s from user %s with %s by user %s',
+                        item, data, item._user_id, current_user.id
+                    )
+                    item._user_id = current_user.id
+                    item._mod_datetime = datetime.datetime.now()
                 for k in data:
                     setattr(item, k, data[k])
                 self.db.session.add(item)
@@ -498,6 +534,11 @@ class AutoBlueprint:
         form = self.forms[name](obj=item)
         form.submit.label.text = 'Delete'
         if form.validate_on_submit():
+            if self.forensics:
+                self.logger.warning(
+                    'Deleting %s from user %s by user %s',
+                    item, item._user_id, current_user.id
+                )
             self.db.session.delete(item)
             self.db.session.commit()
 

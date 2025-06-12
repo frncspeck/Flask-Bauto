@@ -8,6 +8,8 @@ class Test(AutoBlueprint):
     class Genus:
         name: str
         family: str
+        extant: str = 'yes'
+        description: str = None
         species: list[int] = None
         #species: list[int] = relationship('Species', back_populates='genus', cascade="all, delete-orphan")
 
@@ -52,3 +54,4 @@ bs = BullStack(__name__, [
 
 def create_app():
     return bs.create_app()
+
