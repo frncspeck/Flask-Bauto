@@ -27,8 +27,8 @@ class Test(AutoBlueprint):
     class Species:
         genus_id: int
         name: str
+        image: Path
         #recorded: date
-        #experiment_file: Path
 
 class OtherTest(AutoBlueprint):
     @dataclass

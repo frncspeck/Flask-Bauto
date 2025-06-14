@@ -208,6 +208,23 @@ class AutoBlueprint:
                 nullable = True if default is None else False
         )
 
+    def db_transform(self, data, model_name):
+        """Tranform ux provided data to db format
+
+        Arguments
+        ---------
+            data: dict
+                The data dictionary with column name keys and corresponding data
+                The values in this dictionary get transformed
+        """
+        for fieldname, fieldtype in self.models[
+                model_name
+        ].__annotations__.items():
+            if fieldname not in data: continue
+            bautype = BauType.get_types()[fieldtype]
+            if bautype.ux2py:
+                data[fieldname] = bautype(ux_item=data[fieldname]).db_item
+
     def get_default(self, model, fieldname):
         return (
             model.__dataclass_fields__[fieldname].default if
@@ -451,6 +468,8 @@ class AutoBlueprint:
                 k:form.data[k]
                 for k in form.data.keys() - {'submit','csrf_token'}
             }
+            # Check if db transform is required for any of the columns
+            self.db_transform(data, name)
             item = self.models[name](**data)
             self.db.session.add(item)
             self.db.session.commit()
@@ -492,6 +511,8 @@ class AutoBlueprint:
                     k:form.data[k]
                     for k in form.data.keys() - {'submit','csrf_token'}
                 }
+                # Check if db transform is required for any of the columns
+                self.db_transform(data, list_model_name)
                 data[name+'_id'] = id
                 list_item = self.models[list_model_name](**data)
                 self.db.session.add(list_item)
@@ -519,6 +540,8 @@ class AutoBlueprint:
                     )
                     item._user_id = current_user.id
                     item._mod_datetime = datetime.datetime.now()
+                # Check if db transform is required for any of the columns
+                self.db_transform(data, name)
                 for k in data:
                     setattr(item, k, data[k])
                 self.db.session.add(item)

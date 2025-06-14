@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass, field
 from collections import namedtuple
-from collections.abc import Callable
 from pathlib import Path
 import datetime
 
@@ -22,16 +21,42 @@ from sqlalchemy.orm import registry, relationship
 # TODO refactor to work with BauType instead of sql and wtform separate mappings
 @dataclass
 class BauType:
-    py_type: type
-    db_type: type
-    ux_type: type
-    conversion_method: Callable = None
-
+    py_item: any = None
+    db_item: any = None
+    ux_item: any = None
+    py_type: type = None
+    db_type: type = None
+    ux_type: type = None
+    config: namedtuple = None
+    
+    def __post_init__(self):
+        if self.py_item is not None:
+            if self.db_item is None:
+                self.db_item = self.py2db()
+            if self.ux_item is None:
+                self.ux_item = self.py2ux()
+        elif self.db_item is not None:
+            if self.py_item is None:
+                self.py_item = self.db2py()
+            if self.ux_item is None:
+                self.ux_item = self.py2ux()
+        elif self.ux_item is not None:
+            if self.py_item is None:
+                self.py_item = self.ux2py()
+            if self.db_item is None:
+                self.db_item = self.py2db()
+            
     def __call__(self, *args, **kwargs):
         try:
             kwargs['metadata']['bautype'] = self
         except KeyError: kwargs['metadata'] = {'bautype': self}
         return field(*args, **kwargs)
+
+    # Default transform function names to False to check if transform required
+    py2db = False
+    py2ux = False
+    db2py = False
+    ux2py = False
 
     @classmethod
     def get_types(cls):
@@ -77,10 +102,25 @@ class Time(BauType):
 
 @dataclass
 class File(BauType):
-    storage_location: Path = None # TODO could be a specifier of py_type or in db
     py_type: type = Path
-    db_type: type = sa.String
+    db_type: type = sa.JSON
     ux_type: type = wtf.FileField
+
+    def ux2py(self):
+        py_item = {
+            'filename': self.ux_item.filename,
+            'content_type': self.ux_item.content_type,
+            'content_length': self.ux_item.content_length,
+            'mimetype': self.ux_item.mimetype,
+            'content': self.ux_item.stream.read().decode()
+        }
+        return py_item
+    
+    def py2db(self):
+        #storage_location = self.config.storage_location
+        # TODO get from type annotation
+        #if storage_location == 'db':
+        return self.py_item
 
 @dataclass
 class JSON(BauType):
