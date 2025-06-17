@@ -1,6 +1,6 @@
 """Module defining types for use with Flask-Bauto"""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, MISSING
 from collections import namedtuple
 from pathlib import Path
 import datetime
@@ -59,10 +59,14 @@ class BauType:
     ux2py = False
 
     @classmethod
-    def get_types(cls):
+    def _get_types(cls):
         return {
             t.py_type:t for t in cls.__subclasses__()
         }
+
+    @classmethod
+    def _get_type(cls, type):
+        return type if issubclass(type, cls) else cls._get_types()[type]
 
 @dataclass
 class String(BauType):
@@ -107,12 +111,16 @@ class File(BauType):
     ux_type: type = wtf.FileField
 
     def ux2py(self):
+        import base64
         py_item = {
             'filename': self.ux_item.filename,
             'content_type': self.ux_item.content_type,
             'content_length': self.ux_item.content_length,
             'mimetype': self.ux_item.mimetype,
-            'content': self.ux_item.stream.read().decode()
+            'content': base64.b64encode(
+                self.ux_item.stream.read()
+            ).decode("utf-8")#errors="replace")
+            # To decode back to bytes: base64.b64decode(encoded_data)
         }
         return py_item
     
@@ -159,3 +167,8 @@ class OneToManyList:
 #             except ValueError:
 #                 self.data = None
 #                 raise ValueError("Invalid date/time format.")
+
+@dataclass
+class BauContext:
+    type: BauType
+    default: any = MISSING

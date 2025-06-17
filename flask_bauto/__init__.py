@@ -14,7 +14,7 @@ from wtforms.validators import InputRequired, DataRequired, Optional
 from sqlalchemy import Table, Column, Integer, String, ForeignKey, \
     DateTime, Date, Time
 from sqlalchemy.orm import registry, relationship
-from flask_bauto.types import BauType, File, OneToManyList
+from flask_bauto.types import BauType, File, OneToManyList, BauContext
             
 class AutoBlueprint:
     """An automated blueprint for flask based on inner dataclass definitions
@@ -98,6 +98,7 @@ class AutoBlueprint:
         # a registry is defined during the AutoBlueprint definition
         
         # Register models and forms
+        self._set_bauprints()
         self.register_models()
         self.register_forms()
 
@@ -193,9 +194,8 @@ class AutoBlueprint:
     def all_models(self):
         return self.all_defined_models()
         
-    def get_sqlalchemy_column(self, name, type, model_name, model):
+    def get_sqlalchemy_column(self, name, type, default, model_name):
         #self.app.logger.debug(name, type, model_name)
-        default = self.get_default(model, name)
         if name.endswith('_id') and name[:-3] in self.all_models and type is int:
             self.model_properties[model_name][name[:-3]] = relationship(self.snake_to_camel(name[:-3]))
             return Column(
@@ -203,7 +203,7 @@ class AutoBlueprint:
                 nullable = True if default is None else False
             )
         else: return Column(
-                name, BauType.get_types()[type].db_type,
+                name, BauType._get_type(type).db_type,
                 default = None if default is MISSING else default,
                 nullable = True if default is None else False
         )
@@ -221,16 +221,37 @@ class AutoBlueprint:
                 model_name
         ].__annotations__.items():
             if fieldname not in data: continue
-            bautype = BauType.get_types()[fieldtype]
+            bautype = BauType._get_type(fieldtype)
             if bautype.ux2py:
                 data[fieldname] = bautype(ux_item=data[fieldname]).db_item
 
-    def get_default(self, model, fieldname):
+    def _get_default(self, model, fieldname):
         return (
             model.__dataclass_fields__[fieldname].default if
             model.__dataclass_fields__[fieldname].default != MISSING
             else model.__dataclass_fields__[fieldname].default_factory
         )
+
+    def _set_bauprint(self, model):
+        """This method manipulates a model which should be an
+        internal dataclass
+        """
+        model.__bauprint__ = OrderedDict([
+            (
+                name,
+                BauContext(
+                    BauType._get_type(type),
+                    self._get_default(model, name)
+                )
+            ) for name, type in model.__annotations__.items()
+            if type != list[int] or name.startswith('_')
+        ])
+
+    def _set_bauprints(self):
+        """Set `__bauprint__` for each of the defined models
+        """
+        for model in self.datamodels.values():
+            self._set_bauprint(model)
     
     def register_forms(self):
         self.forms = {}
@@ -239,9 +260,9 @@ class AutoBlueprint:
                 pass
 
             for fieldname, fieldtype in dm.__annotations__.items():
-                default_value = self.get_default(dm, fieldname)
                 if fieldtype == list[int]: continue
-                elif fieldname.endswith('_id') and fieldname[:-3] in self.all_models:
+                default_value = dm.__bauprint__[fieldname].default
+                if fieldname.endswith('_id') and fieldname[:-3] in self.all_models:
                     model = self.all_models[fieldname[:-3]]
                     setattr(
                         ModelForm,
@@ -256,7 +277,7 @@ class AutoBlueprint:
                     ModelForm,
                     fieldname,
                     # Primitive types
-                    BauType.get_types()[fieldtype].ux_type(
+                    BauType._get_type(fieldtype).ux_type(
                         fieldname.replace('_',' ').capitalize(),
                         validators=(
                             [] if fieldtype is bool else [
@@ -277,9 +298,8 @@ class AutoBlueprint:
             self.model_properties[name] = {}
             columns = {
                 colname:
-                self.get_sqlalchemy_column(colname,coltype,name,dm)
-                for colname, coltype in dm.__annotations__.items()
-                if coltype != list[int] or colname.startswith('_')
+                self.get_sqlalchemy_column(colname,coltype.type.py_type,coltype.default,name)
+                for colname, coltype in dm.__bauprint__.items()
             }
             if self.forensics:
                 from flask_login import current_user
@@ -412,12 +432,20 @@ class AutoBlueprint:
                 view_func=self.import_all_route,
                 methods=['GET','POST']
             )
+            self.url_routes['Import'] = {
+                'route': f"{self.url_prefix}/import/db",
+                'role': 'admin'
+            }
         # Full export rule
         if self._export_route:
             self.add_url_rule(
-                f"/fullexport", 'full_export', 
+                f"/export/db", 'full_export', 
                 view_func=self.export_all_route, methods=['GET']
             )
+            self.url_routes['Export'] = {
+                'route': f"{self.url_prefix}/export/db",
+                'role': 'admin'
+            }
 
     def add_url_rule(self, *args, protect=None, **kwargs):
         """Wrapper around blueprint.add_url_rule
