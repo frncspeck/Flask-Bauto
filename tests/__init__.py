@@ -2,6 +2,7 @@ from flask_bauto import AutoBlueprint, dataclass, relationship, File
 from bull_stack import BullStack
 from datetime import datetime, date
 from pathlib import Path
+from typing import Annotated
 
 class Test(AutoBlueprint):
     @dataclass
@@ -27,7 +28,7 @@ class Test(AutoBlueprint):
     class Species:
         genus_id: int
         name: str
-        image: Path
+        image: Annotated[Path,{'storage_location':'species'}]
         #recorded: date
 
 class OtherTest(AutoBlueprint):
@@ -50,7 +51,7 @@ class OtherTest(AutoBlueprint):
 bs = BullStack(__name__, [
     Test(enable_crud=True,url_prefix=False,forensics=False),
     OtherTest(enable_crud=True,forensics=True)
-])
+], admin_init_password='badmin')
 
 def create_app():
     return bs.create_app()

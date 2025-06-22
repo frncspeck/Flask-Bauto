@@ -1,12 +1,12 @@
 """Module defining types for use with Flask-Bauto"""
 
 from dataclasses import dataclass, field, MISSING
-from collections import namedtuple
 from pathlib import Path
 import datetime
+import os
 
 # Python types
-from typing import Annotated, get_origin, get_args, get_type_hints
+from typing import Annotated, get_args, get_type_hints
 #type markdown = Annotated[str, {'max_size':255}] # TODO 3.12+ type declaration
 markdown = Annotated[str, {'max_size':255}] # TODO 3.12+ type declaration
 
@@ -27,7 +27,6 @@ class BauType:
     py_type: type = None
     db_type: type = None
     ux_type: type = None
-    config: namedtuple = None
     
     def __post_init__(self):
         if self.py_item is not None:
@@ -45,8 +44,21 @@ class BauType:
                 self.py_item = self.ux2py()
             if self.db_item is None:
                 self.db_item = self.py2db()
-            
-    def __call__(self, *args, **kwargs):
+
+    def __call__(self, py_item=None, db_item=None, ux_item=None):
+        """Calling the instance of the BauType definition has
+        a similar behavior as instantiating the BauType: if an
+        item is provided of either py, db, or ux the other types
+        are calculated as well. This is achieved by rerunning the
+        __post_init__
+        """
+        if py_item is not None: self.py_item = py_item
+        if db_item is not None: self.db_item = db_item
+        if ux_item is not None: self.ux_item = ux_item
+        self.__post_init__()
+        return self
+    
+    def field(self, *args, **kwargs):
         try:
             kwargs['metadata']['bautype'] = self
         except KeyError: kwargs['metadata'] = {'bautype': self}
@@ -59,15 +71,28 @@ class BauType:
     ux2py = False
 
     @classmethod
-    def _get_types(cls):
+    def _get_bautypes(cls):
         return {
             t.py_type:t for t in cls.__subclasses__()
         }
 
     @classmethod
-    def _get_type(cls, type):
-        return type if issubclass(type, cls) else cls._get_types()[type]
+    def _get_bautype(cls, type):
+        if hasattr(type,'__origin__'):
+            # Annotated type
+            # Returns the instanstiated class of the bautype with the annotated type as py_type
+            return cls._get_bautype(
+                type.__origin__
+            )(py_type=type)
+        else:
+            return type if issubclass(type, cls) else cls._get_bautypes()[type]
 
+    @property
+    def metadata(self):
+        return dict(
+            self.py_type.__metadata__[0]
+        ) if hasattr(self.py_type,'__metadata__') else {}
+    
 @dataclass
 class String(BauType):
     py_type: type = str
@@ -120,15 +145,35 @@ class File(BauType):
             'content': base64.b64encode(
                 self.ux_item.stream.read()
             ).decode("utf-8")#errors="replace")
-            # To decode back to bytes: base64.b64decode(encoded_data)
+            # To decode back to bytes: 
         }
         return py_item
     
     def py2db(self):
-        #storage_location = self.config.storage_location
-        # TODO get from type annotation
-        #if storage_location == 'db':
-        return self.py_item
+        if (
+            'storage_location' in self.metadata
+        ) and (
+            'content' in self.py_item
+        ):
+            
+            import base64
+            from flask import current_app
+            from werkzeug.utils import secure_filename
+            storage_location = self.metadata['storage_location']
+            filename = '{}-{}'.format(
+                    datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
+                    secure_filename(self.py_item['filename'])
+            )
+            filepath = os.path.join(
+                current_app.instance_path, storage_location, filename
+            )
+            with open(filepath, 'wb') as fs:
+                fs.write(
+                    base64.b64decode(self.py_item.pop('content'))
+                )
+            self.py_item['content_location'] = filepath
+        else:
+            return self.py_item
 
 @dataclass
 class JSON(BauType):
@@ -169,6 +214,25 @@ class OneToManyList:
 #                 raise ValueError("Invalid date/time format.")
 
 @dataclass
-class BauContext:
+class Bauhaus:
+    name: str
+    model: str
     type: BauType
     default: any = MISSING
+    
+    def create_db_column(self, blueprint):
+        if self.name.endswith('_id') and self.name[:-3] in blueprint.all_models and self.type.py_type is int:
+            blueprint.model_properties[
+                self.model
+            ][self.name[:-3]] = relationship(
+                blueprint.snake_to_camel(self.name[:-3])
+            )
+            return sa.Column(
+                self.name, sa.Integer, sa.ForeignKey(self.name[:-3]+".id"),
+                nullable = True if self.default is None else False
+            )
+        else: return sa.Column(
+                self.name, self.type.db_type,
+                default = None if self.default is MISSING else self.default,
+                nullable = True if self.default is None else False
+        )

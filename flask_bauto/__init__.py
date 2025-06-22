@@ -14,7 +14,7 @@ from wtforms.validators import InputRequired, DataRequired, Optional
 from sqlalchemy import Table, Column, Integer, String, ForeignKey, \
     DateTime, Date, Time
 from sqlalchemy.orm import registry, relationship
-from flask_bauto.types import BauType, File, OneToManyList, BauContext
+from flask_bauto.types import BauType, File, OneToManyList, Bauhaus
             
 class AutoBlueprint:
     """An automated blueprint for flask based on inner dataclass definitions
@@ -194,20 +194,6 @@ class AutoBlueprint:
     def all_models(self):
         return self.all_defined_models()
         
-    def get_sqlalchemy_column(self, name, type, default, model_name):
-        #self.app.logger.debug(name, type, model_name)
-        if name.endswith('_id') and name[:-3] in self.all_models and type is int:
-            self.model_properties[model_name][name[:-3]] = relationship(self.snake_to_camel(name[:-3]))
-            return Column(
-                name, Integer, ForeignKey(name[:-3]+".id"),
-                nullable = True if default is None else False
-            )
-        else: return Column(
-                name, BauType._get_type(type).db_type,
-                default = None if default is MISSING else default,
-                nullable = True if default is None else False
-        )
-
     def db_transform(self, data, model_name):
         """Tranform ux provided data to db format
 
@@ -221,7 +207,7 @@ class AutoBlueprint:
                 model_name
         ].__annotations__.items():
             if fieldname not in data: continue
-            bautype = BauType._get_type(fieldtype)
+            bautype = BauType._get_bautype(fieldtype)
             if bautype.ux2py:
                 data[fieldname] = bautype(ux_item=data[fieldname]).db_item
 
@@ -232,15 +218,16 @@ class AutoBlueprint:
             else model.__dataclass_fields__[fieldname].default_factory
         )
 
-    def _set_bauprint(self, model):
+    def _set_bauprint(self, model_name, model):
         """This method manipulates a model which should be an
         internal dataclass
         """
         model.__bauprint__ = OrderedDict([
             (
                 name,
-                BauContext(
-                    BauType._get_type(type),
+                Bauhaus(
+                    name, model_name,
+                    BauType._get_bautype(type),
                     self._get_default(model, name)
                 )
             ) for name, type in model.__annotations__.items()
@@ -250,8 +237,8 @@ class AutoBlueprint:
     def _set_bauprints(self):
         """Set `__bauprint__` for each of the defined models
         """
-        for model in self.datamodels.values():
-            self._set_bauprint(model)
+        for name, model in self.datamodels.items():
+            self._set_bauprint(name, model)
     
     def register_forms(self):
         self.forms = {}
@@ -277,7 +264,7 @@ class AutoBlueprint:
                     ModelForm,
                     fieldname,
                     # Primitive types
-                    BauType._get_type(fieldtype).ux_type(
+                    BauType._get_bautype(fieldtype).ux_type(
                         fieldname.replace('_',' ').capitalize(),
                         validators=(
                             [] if fieldtype is bool else [
@@ -297,8 +284,7 @@ class AutoBlueprint:
         for name, dm in self.datamodels.items():
             self.model_properties[name] = {}
             columns = {
-                colname:
-                self.get_sqlalchemy_column(colname,coltype.type.py_type,coltype.default,name)
+                colname: coltype.create_db_column(self)
                 for colname, coltype in dm.__bauprint__.items()
             }
             if self.forensics:
