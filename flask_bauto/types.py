@@ -18,7 +18,6 @@ import sqlalchemy as sa
 from sqlalchemy.orm import registry, relationship
 
 # Type definitions that also act as descriptors for use on instance instantiation
-# TODO refactor to work with BauType instead of sql and wtform separate mappings
 @dataclass
 class BauType:
     py_item: any = None
@@ -172,8 +171,7 @@ class File(BauType):
                     base64.b64decode(self.py_item.pop('content'))
                 )
             self.py_item['content_location'] = filepath
-        else:
-            return self.py_item
+        return self.py_item
 
 @dataclass
 class JSON(BauType):
