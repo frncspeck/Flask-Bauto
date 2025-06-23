@@ -50,7 +50,7 @@ class OtherTest(AutoBlueprint):
 
 bs = BullStack(__name__, [
     Test(enable_crud=True,url_prefix=False,forensics=False),
-    OtherTest(enable_crud=True,forensics=True)
+    OtherTest(enable_crud=True,forensics=True, fair_data=False)
 ], admin_init_password='badmin')
 
 def create_app():

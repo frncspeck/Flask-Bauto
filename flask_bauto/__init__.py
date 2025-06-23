@@ -84,6 +84,7 @@ class AutoBlueprint:
         self.protect_index = protect_index
         self.url_prefix = '' if url_prefix is False else f"/{url_prefix or self.name}"
         self.url_routes = {}
+        self.view_functions = {}
         self.index_page = index_page
         if imex:
             self._import_route = True
@@ -137,7 +138,7 @@ class AutoBlueprint:
         # Set menu
         if 'fefset' in app.extensions:
             fef = app.extensions['fefset']
-            fef.add_submenu(self.name)
+            fef.add_submenu(self.name, role=False if self.fair_data else self.name)
             for name, route in self.url_routes.items():
                 fef.add_menu_entry(
                     name, route['route'], submenu=self.name, role=route['role']
@@ -364,7 +365,7 @@ class AutoBlueprint:
             )
             self.url_routes[f"Create {name}"] = {
                 'route':f"{self.url_prefix}/{name}/create",
-                'role':f"{self.name}_admin"
+                'role':self.name
             }
             # List
             self.add_url_rule(
@@ -440,17 +441,24 @@ class AutoBlueprint:
         from flask_iam import login_required, role_required
         if (protect in (None,True) or isinstance(protect,str)) and self.protect:
             if isinstance(protect,str): # Custom set role protection
-                kwargs['view_func'] = role_required(protect)(kwargs['view_func'])
+                args = [a+'_roleprotect' if i==1 else a for i,a in enumerate(args)]
+                if args[1] not in self.view_functions:
+                    self.view_functions[args[1]] = role_required(protect)(kwargs['view_func'])
             elif isinstance(self.protect,str): # Blueprint level role protection
-                kwargs['view_func'] = role_required(self.protect)(kwargs['view_func'])
+                args = [a+'_globalroleprotect' if i==1 else a for i,a in enumerate(args)]
+                if args[1] not in self.view_functions:
+                    self.view_functions[args[1]] = role_required(self.protect)(kwargs['view_func'])
             else: # Standard login_required protection
-                kwargs['view_func'] = login_required(kwargs['view_func'])
+                args = [a+'_loginprotect' if i==1 else a for i,a in enumerate(args)]
+                if args[1] not in self.view_functions:
+                    self.view_functions[args[1]] = login_required(kwargs['view_func'])
+            kwargs['view_func'] = self.view_functions[args[1]]
         return self.blueprint.add_url_rule(*args, **kwargs)
     
     def add_url_rules(self, methods=['GET','POST']):
         if self.index_page:
             self.blueprint.add_url_rule('/', 'index', view_func=self.index, methods=['GET'])
-            self.url_routes[self.name] = {'route': f"{self.url_prefix}/", 'role': False}
+            self.url_routes[self.name] = {'route': f"{self.url_prefix}/", 'role': False if self.fair_data else self.name}
         cls = self.__class__
         viewfunctions = inspect.getmembers(
             cls,
