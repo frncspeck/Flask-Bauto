@@ -14,7 +14,7 @@ from wtforms.validators import InputRequired, DataRequired, Optional
 from sqlalchemy import Table, Column, Integer, String, ForeignKey, \
     DateTime, Date, Time
 from sqlalchemy.orm import registry, relationship
-from flask_bauto.types import BauType, File, OneToManyList, Bauhaus
+from flask_bauto.types import BauType, Route, File, OneToManyList, Bauhaus
             
 class AutoBlueprint:
     """An automated blueprint for flask based on inner dataclass definitions
@@ -84,6 +84,7 @@ class AutoBlueprint:
         self.protect_index = protect_index
         self.url_prefix = '' if url_prefix is False else f"/{url_prefix or self.name}"
         self.url_routes = {}
+        self.routes = OrderedDict()
         self.view_functions = {}
         self.index_page = index_page
         if imex:
@@ -110,10 +111,12 @@ class AutoBlueprint:
         )
 
         # Routes
-        self.add_url_rules()
+        self.add_routes()
         if enable_crud:
             self.enable_crud = self.models if enable_crud is True else enable_crud
-            self.add_url_crud_rules()
+            self.add_crud_routes()
+        self.add_url_rules()
+
 
     def init_app(self, app):
         """
@@ -354,111 +357,107 @@ class AutoBlueprint:
                 )
             
             self.models[name.lower()] = dm
-        
-    def add_url_crud_rules(self):
+
+    def add_crud_routes(self):
         for name in self.enable_crud:
             # Create
-            self.add_url_rule(
-                f"/{name}/create", f"{name}_create", 
-                view_func=self.create, defaults={'name':name},
-                methods=['GET','POST']
+            self.add_route(
+                f"{name}_create", f"/{name}/create",
+                roles=[self.name],
+                view_function=self.create, defaults={'name':name},
+                methods=('GET','POST'), menu_label=f"Create {name}"
             )
-            self.url_routes[f"Create {name}"] = {
-                'route':f"{self.url_prefix}/{name}/create",
-                'role':self.name
-            }
             # List
-            self.add_url_rule(
-                f"/{name}/list", f"{name}_list", 
-                view_func=self.list, defaults={'name':name},
-                methods=['GET'], protect=not(self.fair_data)
+            self.add_route(
+                f"{name}_list", f"/{name}/list",
+                roles=not(self.fair_data),
+                view_function=self.list,
+                defaults={'name':name},
+                menu_label=f"List {name}"
             )
-            self.url_routes[f"List {name}"] = {
-                'route': f"{self.url_prefix}/{name}/list",
-                'role': False
-            }
             # Read
-            self.add_url_rule(
-                f"/{name}/read/<int:id>", f"{name}_read", 
-                view_func=self.read, defaults={'name':name},
-                methods=['GET'], protect=not(self.fair_data)
+            self.add_route(
+                f"{name}_read", f"/{name}/read/<int:id>",
+                roles=not(self.fair_data),
+                view_function=self.read,
+                defaults={'name':name}
             )
-            self.add_url_rule(
-                f"/{name}/read/<int:id>/<list_attribute>", f"{name}_read", 
-                view_func=self.read, defaults={'name':name},
-                methods=['GET'], protect=not(self.fair_data)
+            self.add_route(
+                f"{name}_read", 
+                f"/{name}/read/<int:id>/<list_attribute>",
+                roles=not(self.fair_data),
+                view_function=self.read,
+                defaults={'name':name}
             )
             # Update
-            self.add_url_rule(
-                f"/{name}/update/<int:id>", f"{name}_update", 
-                view_func=self.update, defaults={'name':name},
-                methods=['GET','POST']
+            self.add_route(
+                f"{name}_update", f"/{name}/update/<int:id>",
+                roles=[self.name],
+                view_function=self.update,
+                defaults={'name':name},
+                methods=('GET','POST')
             )
-            self.add_url_rule(
-                f"/{name}/update/<int:id>/add/<list_attribute>", f"{name}_update_attribute", 
-                view_func=self.update, defaults={'name':name},
-                methods=['GET','POST']
+            self.add_route(
+                f"{name}_update_attribute",
+                f"/{name}/update/<int:id>/add/<list_attribute>",
+                roles=[self.name],
+                view_function=self.update,
+                defaults={'name':name},
+                methods=('GET','POST')
             )
             # Delete
-            self.add_url_rule(
-                f"/{name}/delete/<int:id>", f"{name}_delete", 
-                view_func=self.delete, defaults={'name':name},
-                methods=['GET','POST']
+            self.add_route(
+                f"{name}_delete", f"/{name}/delete/<int:id>",
+                roles=[self.name],
+                view_function=self.delete,
+                defaults={'name':name},
+                methods=('GET','POST')
             )
             # Export rule
             if self._export_route:
-                self.add_url_rule(
-                    f"/{name}/export", f"{name}_export", 
-                    view_func=self.export_route, defaults={'name':name},
-                    methods=['GET']
+                self.add_route(
+                    f"{name}_export", f"/{name}/export",
+                    roles=[self.name],
+                    view_function=self.export_route,
+                    defaults={'name':name}
                 )
         # Full import rule
         if self._import_route:
-            self.add_url_rule(
-                '/import/db', 'import_db', 
-                view_func=self.import_all_route,
-                methods=['GET','POST']
+            self.add_route(
+                'import_db', '/import/db',
+                roles= ['admin'],
+                view_function=self.import_all_route,
+                methods=('GET','POST'),
+                menu_label='Import'
             )
-            self.url_routes['Import'] = {
-                'route': f"{self.url_prefix}/import/db",
-                'role': 'admin'
-            }
+
         # Full export rule
         if self._export_route:
-            self.add_url_rule(
-                f"/export/db", 'full_export', 
-                view_func=self.export_all_route, methods=['GET']
+            self.add_route(
+                'full_export', f"/export/db",
+                roles= ['admin'],
+                view_function=self.export_all_route,
+                menu_label='Export'
             )
-            self.url_routes['Export'] = {
-                'route': f"{self.url_prefix}/export/db",
-                'role': 'admin'
-            }
-
-    def add_url_rule(self, *args, protect=None, **kwargs):
-        """Wrapper around blueprint.add_url_rule
-        adding protection if enabled on AutoBlueprint
-        """
-        from flask_iam import login_required, role_required
-        if (protect in (None,True) or isinstance(protect,str)) and self.protect:
-            if isinstance(protect,str): # Custom set role protection
-                args = [a+'_roleprotect' if i==1 else a for i,a in enumerate(args)]
-                if args[1] not in self.view_functions:
-                    self.view_functions[args[1]] = role_required(protect)(kwargs['view_func'])
-            elif isinstance(self.protect,str): # Blueprint level role protection
-                args = [a+'_globalroleprotect' if i==1 else a for i,a in enumerate(args)]
-                if args[1] not in self.view_functions:
-                    self.view_functions[args[1]] = role_required(self.protect)(kwargs['view_func'])
-            else: # Standard login_required protection
-                args = [a+'_loginprotect' if i==1 else a for i,a in enumerate(args)]
-                if args[1] not in self.view_functions:
-                    self.view_functions[args[1]] = login_required(kwargs['view_func'])
-            kwargs['view_func'] = self.view_functions[args[1]]
-        return self.blueprint.add_url_rule(*args, **kwargs)
     
-    def add_url_rules(self, methods=['GET','POST']):
+    def add_route(
+            self, name, route, roles, view_function,
+            defaults=None, methods=('GET',), menu_label=None,
+            submenu=None, subsubmenu=None):
+        self.routes[name] = Route(
+            route, name, roles, view_function,
+            defaults=defaults or dict(), methods=methods,
+            menu_label=menu_label, submenu=submenu,
+            subsubmenu=subsubmenu
+        )
+        
+    def add_routes(self):
         if self.index_page:
-            self.blueprint.add_url_rule('/', 'index', view_func=self.index, methods=['GET'])
-            self.url_routes[self.name] = {'route': f"{self.url_prefix}/", 'role': False if self.fair_data else self.name}
+            self.routes[self.name] = Route(
+                '/', self.name,
+                roles=False if self.fair_data else [self.name],
+                view_function=self.index, menu_label=self.name
+            )
         cls = self.__class__
         viewfunctions = inspect.getmembers(
             cls,
@@ -467,8 +466,26 @@ class AutoBlueprint:
             and x.__annotations__.get('return',None) == str # TODO View type
         )
         for name, viewfunction in viewfunctions:
-            self.blueprint.add_url_rule(f"/{name}", name, view_func=viewfunction, methods=['GET'], defaults={'self':self})
-            self.url_routes[name] = {'route': f"{self.url_prefix}/{name}", 'role': False}
+            self.routes[f"/{name}"] = Route(
+                f"/{name}", name,
+                roles=False,
+                view_function=viewfunction,
+                defaults={'self':self}
+            )
+    
+    def add_url_rules(self):
+        for route in self.routes.values():
+            self.blueprint.add_url_rule(
+                route.url_suffix, route.name,
+                view_func=route.view,
+                defaults=route.defaults,
+                methods=route.methods
+            )
+            if route.menu_label:
+                self.url_routes[route.menu_label] = {
+                    'route': f"{self.url_prefix}{route.url_suffix}",
+                    'role': route.roles
+                }
 
     # Database utilities
     @property

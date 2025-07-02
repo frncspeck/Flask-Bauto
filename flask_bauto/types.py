@@ -234,3 +234,30 @@ class Bauhaus:
                 default = None if self.default is MISSING else self.default,
                 nullable = True if self.default is None else False
         )
+
+@dataclass
+class Route:
+    url_suffix: str
+    name: str
+    roles: list[str]|bool
+    view_function: callable
+    defaults: dict = field(default_factory=dict)
+    methods: tuple[str] = ('GET',)
+    return_type: type = None
+    menu_label: str = None
+    submenu: str = None
+    subsubmenu: str = None
+
+    def __post_init__(self):
+        from flask_iam import login_required, role_required
+        if (self.roles in (None,True) or isinstance(self.roles,list)):
+            if isinstance(self.roles,list): # Custom set role protection
+                self.view = role_required(self.roles)(self.view_function)
+            else: # Standard login_required protection
+
+                self.view = login_required(self.view_function)
+        else: self.view = self.view_function
+        if self.return_type is None:
+            self.return_type = self.view_function.__annotations__.get(
+                'return',MISSING
+            )
