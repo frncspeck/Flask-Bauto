@@ -7,8 +7,14 @@ import os
 
 # Python types
 from typing import Annotated, get_args, get_type_hints
+
+## markdown
 #type markdown = Annotated[str, {'max_size':255}] # TODO 3.12+ type declaration
 markdown = Annotated[str, {'max_size':255}] # TODO 3.12+ type declaration
+
+## url
+from urllib.parse import urlparse, ParseResult
+url = ParseResult
 
 # Form types
 import wtforms as wtf
@@ -111,6 +117,12 @@ class Float(BauType):
     ux_type: type = wtf.FloatField
 
 @dataclass
+class Bool(BauType):
+    py_type: type = bool
+    db_type: type = sa.Boolean
+    ux_type: type = wtf.BooleanField
+    
+@dataclass
 class DateTime(BauType):
     py_type: type = datetime.datetime
     db_type: type = sa.DateTime
@@ -128,6 +140,18 @@ class Time(BauType):
     db_type: type = sa.Time
     ux_type: type = wtf.TimeField
 
+@dataclass
+class URL(BauType):
+    py_type: type = url
+    db_type: type = sa.String
+    ux_type: type = wtf.StringField
+
+    def ux2py(self):
+        return urlparse(self.ux_item)
+
+    def py2db(self):
+        return self.py_item.geturl()
+    
 @dataclass
 class File(BauType):
     py_type: type = Path

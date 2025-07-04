@@ -383,7 +383,7 @@ class AutoBlueprint:
                 defaults={'name':name}
             )
             self.add_route(
-                f"{name}_read", 
+                f"{name}_read_attribute", 
                 f"/{name}/read/<int:id>/<list_attribute>",
                 roles=not(self.fair_data),
                 view_function=self.read,
@@ -463,7 +463,10 @@ class AutoBlueprint:
             cls,
             lambda x: inspect.isroutine(x)
             and hasattr(x,'__annotations__')
-            and x.__annotations__.get('return',None) == str # TODO View type
+            and isinstance(
+                x.__annotations__.get('return',None),
+                (str,Route) #TODO include dict for json returning routes
+            )
         )
         for name, viewfunction in viewfunctions:
             self.routes[f"/{name}"] = Route(
@@ -471,7 +474,10 @@ class AutoBlueprint:
                 roles=False,
                 view_function=viewfunction,
                 defaults={'self':self}
-            )
+            ) if isinstance(
+                viewfunction.__annotations__.get('return'), str
+            # If explicit Route is defined use that
+            ) else viewfunction.__annotations__.get('return')
     
     def add_url_rules(self):
         for route in self.routes.values():
@@ -573,6 +579,7 @@ class AutoBlueprint:
                     for k in form.data.keys() - {'submit','csrf_token'}
                 }
                 if self.forensics:
+                    from flask_login import current_user
                     self.logger.info(
                         'Updating %s from user %s with %s by user %s',
                         item, data, item._user_id, current_user.id
@@ -597,8 +604,9 @@ class AutoBlueprint:
         form.submit.label.text = 'Delete'
         if form.validate_on_submit():
             if self.forensics:
+                from flask_login import current_user
                 self.logger.warning(
-                    'Deleting %s from user %s by user %s',
+                    'Deleting %s from %s by user %s',
                     item, item._user_id, current_user.id
                 )
             self.db.session.delete(item)

@@ -20,6 +20,7 @@ ENV TZ="Europe/Brussels"
 ENV PATH=/home/app/.local/bin/:$PATH
 ENV FLASK_APP=tests:create_app
 ENV FLASK_RUN_HOST=0.0.0.0
+ENV FLASK_DEBUG=true
 
 COPY --chown=app:app . .
 RUN pip install .[fullstack,dev]

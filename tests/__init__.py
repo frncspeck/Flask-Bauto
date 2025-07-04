@@ -3,6 +3,7 @@ from bull_stack import BullStack
 from datetime import datetime, date
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import ParseResult
 
 class Test(AutoBlueprint):
     @dataclass
@@ -29,6 +30,7 @@ class Test(AutoBlueprint):
         genus_id: int
         name: str
         image: Annotated[Path,{'storage_location':'species'}]
+        gbif_url: ParseResult
         #recorded: date
 
 class OtherTest(AutoBlueprint):
