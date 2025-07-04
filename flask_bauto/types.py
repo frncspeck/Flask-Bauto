@@ -104,6 +104,13 @@ class String(BauType):
     db_type: type = sa.String
     ux_type: type = wtf.StringField
 
+    def __post_init__(self):
+        if hasattr(self.py_type,'__metadata__'):
+            try:
+                if self.py_type.__metadata__[0]['min_size'] > 100:
+                    self.ux_type = wtf.TextAreaField
+            except KeyError: pass
+
 @dataclass
 class Integer(BauType):
     py_type: type = int

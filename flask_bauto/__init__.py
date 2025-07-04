@@ -42,6 +42,8 @@ class AutoBlueprint:
         names and routes dict
     index_page : str
         html template for blueprint index
+    index_menu : str
+        label for index_page in menu
     _import_route : bool
         enable db import
     _export_route : bool
@@ -57,7 +59,7 @@ class AutoBlueprint:
     def __init__(
             self, app=None, registry=registry(), url_prefix=None, enable_crud=False,
             fair_data=True, forensics=False, protect_data=True, imex=True,
-            protect_index=False, index_page='base.html'):
+            protect_index=False, index_page='base.html', index_menu=None):
         """
         Parameters
         ----------
@@ -75,6 +77,8 @@ class AutoBlueprint:
             names and routes dict
         index_page : str
             html template for blueprint index        
+        index_menu : str
+            label for index_page in menu
         """
         
         self.name = self.__class__.__name__.lower()
@@ -87,6 +91,7 @@ class AutoBlueprint:
         self.routes = OrderedDict()
         self.view_functions = {}
         self.index_page = index_page
+        self.index_menu_name = index_menu or self.name
         if imex:
             self._import_route = True
             self._export_route = True
@@ -456,28 +461,29 @@ class AutoBlueprint:
             self.routes[self.name] = Route(
                 '/', self.name,
                 roles=False if self.fair_data else [self.name],
-                view_function=self.index, menu_label=self.name
+                view_function=self.index, menu_label=self.index_menu_name
             )
         cls = self.__class__
         viewfunctions = inspect.getmembers(
             cls,
             lambda x: inspect.isroutine(x)
             and hasattr(x,'__annotations__')
-            and isinstance(
+            and (isinstance(
                 x.__annotations__.get('return',None),
-                (str,Route) #TODO include dict for json returning routes
-            )
+                (str,Route) #Instance in case route url is passed directly or Route instance
+            ) or x.__annotations__.get('return',None) in (str,dict,Route))
         )
         for name, viewfunction in viewfunctions:
-            self.routes[f"/{name}"] = Route(
-                f"/{name}", name,
+            return_type = viewfunction.__annotations__.get('return')
+            self.routes[name] = Route(
+                return_type, name,
                 roles=False,
                 view_function=viewfunction,
                 defaults={'self':self}
             ) if isinstance(
-                viewfunction.__annotations__.get('return'), str
+                return_type, str
             # If explicit Route is defined use that
-            ) else viewfunction.__annotations__.get('return')
+            ) else return_type
     
     def add_url_rules(self):
         for route in self.routes.values():
