@@ -128,7 +128,17 @@ class Bool(BauType):
     py_type: type = bool
     db_type: type = sa.Boolean
     ux_type: type = wtf.BooleanField
-    
+
+@dataclass
+class Enum(BauType):
+    py_type: type = tuple
+    db_type: type = sa.Integer
+    ux_type: type = wtf.SelectField
+
+    #def py2ux(self):
+    #    from enum import Enum
+    #    "AnonymousEnum"
+
 @dataclass
 class DateTime(BauType):
     py_type: type = datetime.datetime
@@ -248,8 +258,50 @@ class Bauhaus:
     model: str
     type: BauType
     default: any = MISSING
-    
-    def create_db_column(self, blueprint):
+
+    def build_ux_field(self, blueprint, FormClass):
+        if self.type.py_type == list[int]:
+            # One2many relationship cannot yet be instantiated if this instance does not yet exist
+            return
+        default_value = self.default
+        if self.name.endswith('_id') and self.name[:-3] in blueprint.all_models:
+            model = blueprint.all_models[self.name[:-3]]
+            setattr(
+                FormClass,
+                self.name,
+                wtf.SelectField(
+                    self.name.replace('_',' ').capitalize(),
+                    # lambda required default model as otherwise the last reference to model is used
+                    choices=lambda model=model: [(i.id,i) for i in blueprint.db.session.query(model).all()]
+                )
+            ) # TODO allow blank option if default is None
+        elif self.type.py_type == tuple[str]:
+            setattr(
+                FormClass,
+                self.name,
+                wtf.SelectField(
+                    self.name.replace('_',' ').capitalize(),
+                    choices=[(i,l) for i,l in enumerate(default_value)]
+                )
+            )
+        else:
+            setattr(
+                FormClass,
+                self.name,
+                # Primitive types
+                self.type.ux_type(
+                    self.name.replace('_',' ').capitalize(),
+                    validators=(
+                        [] if self.type.py_type is bool else [
+                            wtf.validators.Optional() if default_value is None
+                            else wtf.validators.InputRequired()
+                        ]
+                    ),
+                    default=None if default_value is MISSING else default_value
+                )
+            )
+        
+    def build_db_column(self, blueprint):
         if self.name.endswith('_id') and self.name[:-3] in blueprint.all_models and self.type.py_type is int:
             blueprint.model_properties[
                 self.model

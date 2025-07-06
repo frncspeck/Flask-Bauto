@@ -46,7 +46,7 @@ class OtherTest(AutoBlueprint):
         crop_id: int
         name: str
         
-    def show_forensics(self) -> str:
+    def show_forensics(self) -> '/forensics':
         c = self.query.crop.get(1)
         return f"User id {c._user_id}, time of last mod {c._mod_datetime}"
 

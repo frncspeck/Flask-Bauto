@@ -255,34 +255,9 @@ class AutoBlueprint:
             class ModelForm(FlaskForm):
                 pass
 
-            for fieldname, fieldtype in dm.__annotations__.items():
-                if fieldtype == list[int]: continue
-                default_value = dm.__bauprint__[fieldname].default
-                if fieldname.endswith('_id') and fieldname[:-3] in self.all_models:
-                    model = self.all_models[fieldname[:-3]]
-                    setattr(
-                        ModelForm,
-                        fieldname,
-                        SelectField(
-                            fieldname.replace('_',' ').capitalize(),
-                            # lambda required default model as otherwise the last reference to model is used
-                            choices=lambda model=model: [(i.id,i) for i in self.db.session.query(model).all()]
-                        )
-                    ) # TODO allow blank option if default is None
-                else: setattr(
-                    ModelForm,
-                    fieldname,
-                    # Primitive types
-                    BauType._get_bautype(fieldtype).ux_type(
-                        fieldname.replace('_',' ').capitalize(),
-                        validators=(
-                            [] if fieldtype is bool else [
-                                Optional() if default_value is None else InputRequired()
-                            ]
-                        ),
-                        default=None if default_value is MISSING else default_value
-                    )
-                )
+            for bauhaus in dm.__bauprint__.values():
+                bauhaus.build_ux_field(self, ModelForm)
+                
             setattr(ModelForm, 'submit', SubmitField(f'Submit "{name}"'))
             self.forms[name.lower()] = ModelForm
 
@@ -293,7 +268,7 @@ class AutoBlueprint:
         for name, dm in self.datamodels.items():
             self.model_properties[name] = {}
             columns = {
-                colname: coltype.create_db_column(self)
+                colname: coltype.build_db_column(self)
                 for colname, coltype in dm.__bauprint__.items()
             }
             if self.forensics:
