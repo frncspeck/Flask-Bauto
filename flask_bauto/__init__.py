@@ -57,7 +57,7 @@ class AutoBlueprint:
     """
     
     def __init__(
-            self, app=None, registry=registry(), url_prefix=None, enable_crud=False,
+            self, app=None, registry=None, url_prefix=None, enable_crud=False,
             fair_data=True, forensics=False, protect_data=True, imex=True,
             protect_index=False, index_page='base.html', index_menu=None):
         """
@@ -83,6 +83,7 @@ class AutoBlueprint:
         
         self.name = self.__class__.__name__.lower()
         self.fair_data = fair_data
+        self.enable_crud = enable_crud
         self.forensics = forensics # track user and time of modifications
         self.protect = protect_data
         self.protect_index = protect_index
@@ -98,7 +99,10 @@ class AutoBlueprint:
 
         # Set up logging
         self.logger = logging.getLogger(self.name)
+        if registry:
+            self.set_bauprint(registry)
 
+    def set_bauprint(self, registry):
         # Set up registry
         self.mapper_registry = registry# or self.registry
         # To allow sibling AutoBlueprint's to find models in each other's namespaces
@@ -117,13 +121,12 @@ class AutoBlueprint:
 
         # Routes
         self.add_routes()
-        if enable_crud:
-            self.enable_crud = self.models if enable_crud is True else enable_crud
+        if self.enable_crud:
+            self.enable_crud = self.models if self.enable_crud is True else self.enable_crud
             self.add_crud_routes()
         self.add_url_rules()
 
-
-    def init_app(self, app):
+    def init_app(self, app, registry=None):
         """
         Parameters
         ----------
