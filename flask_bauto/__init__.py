@@ -348,7 +348,8 @@ class AutoBlueprint:
                 f"{name}_create", f"/{name}/create",
                 roles=[self.name],
                 view_function=self.create, defaults={'name':name},
-                methods=('GET','POST'), menu_label=f"Create {name}"
+                methods=('GET','POST'),
+                menu_label=f"Create {name}"
             )
             # List
             self.add_route(
@@ -356,7 +357,7 @@ class AutoBlueprint:
                 roles=not(self.fair_data),
                 view_function=self.list,
                 defaults={'name':name},
-                menu_label=f"List {name}"
+                menu_label=name.capitalize().replace('_',' ')
             )
             # Read
             self.add_route(
